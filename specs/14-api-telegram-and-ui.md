@@ -1,0 +1,1151 @@
+# 14 — HTTP API, SSE, exports, Telegram commands, minimal web UI
+
+**Status:** proposed (reconciled with 02 on 2026-09-23) · **Phase:** 11 — except the §2.4 routing table, the §8.5 alert templates and the control routes, which 01 ships in Phase 0 (`alert_dispatch`, 02 §D3) · **Depends on:** 02 (reconciliation ledger — binding over this spec; cited `02 §<id>`), 01 (runtime, `Settings`, job wrapper, `/health` builder, `Http`/`ProviderLimiter`, `create_app`, `alert_dispatch`), 03 (DDL, events catalog §3.9), 04 (registry, needs-review list), 11 (team/owner/review domain functions §2.12), 12 (scores, explain, metric registry, rescore), 13 (quant result JSONs), 16 (`app/control.py`, `PAUSE_GROUPS`, cost governor, backups, systemd units) · **Master spec refs:** §1.3, §2 (reuse table rows `main.py` factory, `api_auth.py`, `telegram.py`, `frontend/`), §5, §6, §7.5, §7.7, §9, §11, §12
+
+---
+
+## 1. Purpose and scope
+
+This spec defines every operator-facing surface of TaoSentinel: the FastAPI application on `:8090` (01's `HEALTH_HOST`/`HEALTH_PORT`), its read/mutation tiers, the SSE stream, CSV/JSON exports, the Telegram command bot, the **alert routing** (02 §A2, §D4) and the minimal Next.js UI on `:3001`. All three surfaces read the **same** query layer (`app/api/queries.py`) so a number shown in Telegram equals the number in the matrix and in the trading feed.
+
+**In scope**
+- `create_app()` factory (one factory; 01 ships its Phase-0 subset), CORS allowlist, two-tier auth (open reads, `X-Auth-Token` mutations) plus an origin guard, closure injection (`ApiContext`).
+- The complete route inventory (§3.5), including routes whose semantics other specs own (01 jobs/control, 04 registry, 11 team/owner/review, 12 rescore, 16 budget override): this spec fixes method, path, tier, body, status codes and error mapping.
+- Endpoints defined here: `/api/health/services`, `/api/v1/scores/*`, `/api/v1/subnets*`, `/api/v1/events`, `/api/v1/matrix.csv`, `/api/v1/export/scores.json`, `/api/v1/stream`, `/api/v1/quant/results*`, `/api/v1/manual/*`, `/api/v1/review*`, `/api/v1/control/*`. `/health` is served here but built by 01 (02 §G6).
+- Telegram: transport (ported), command handlers, reply formats, inline keyboards; the **routing table** (§2.4) and alert templates (§8.5) that 01's Phase-0 `alert_dispatch` job applies (02 §D3); `dereg_watch` for `WATCHLIST_NETUIDS`; the weekly needs-review digest, which also delivers every digest-routed event.
+- Frontend fork: three pages, component list, `api.ts` changes.
+- Tests and verify checklist.
+
+**Out of scope**
+- Computing any metric or score (spec 12). This component **produces no `metric_values`**.
+- The `alert_dispatch` job body (`app/alerts/dispatch.py`, 01, Phase 0 — 02 §D3) and `AlertLatch` (01); this spec owns what is routed where and how messages look.
+- The `/health` body (01, 02 §G6); pause/kill mechanics and `PAUSE_GROUPS` (`app/control.py`, 16 §2.11); team/owner/review semantics (11 §2.12); the cost governor (16).
+- The in-browser `.env` editor (`config_api.py`) — not ported in v1 (master §2: config is edited on disk, restart required).
+- The trading-bot consumer of `/api/v1/scores/latest` (spec 15). This spec fixes the producer contract; 15 has no producer route of its own (02 §H1).
+- systemd unit files for backend/frontend (spec 16 §2.4; referenced here).
+- Any authentication beyond a single shared token; any TLS termination (loopback + LAN/tailnet only).
+
+---
+
+## 2. Design
+
+### 2.1 Components
+
+```
+ runtime.py (spec 01)                                 app/api/
+ ┌─────────────────────────┐    ApiContext             ┌───────────────────────────────────────────┐
+ │ db, jobs/tasks, limiter,│ ─────────────────────────►│ app.py  create_app(ctx=None) → FastAPI     │
+ │ Http, cost governor,    │   (closures, no import    │   health.py    scores.py   subnets.py      │
+ │ /health builder, rescore│    of app.runtime)        │   events.py    export.py   stream.py       │
+ └─────────────────────────┘                           │   quant.py     manual.py   review.py       │
+              │                                        │   control.py   queries.py · hub.py (SSE)   │
+              │                                        └───────────────────────────────────────────┘
+              │                                            ▲ same queries · 11 domain fns · 16 app/control.py
+              ▼                                            │
+ app/alerts/  (01 implements, Phase 0, 02 §D3)         app/notifications/commands.py
+   dispatch.py  alert_dispatch  ◄── routing.py (§2.4)  build_handlers(ctx) → TelegramCommandHandlers
+                                ◄── templates.py (§8.5)
+ app/notifications/  telegram.py (ported transport) · bot.py (telegram_bot) · watch.py (dereg_watch)
+                     digest.py (needs_review_digest) · format.py (esc, pre tables, chunk)
+              │
+              ▼  Http.request("telegram", …)  (01 limiter, 02 §G1)
+         Telegram API                                   frontend/ (Next.js :3001) ── fetch/SSE ──► :8090
+```
+
+- **`ApiContext`** (`app/api/context.py`) is a dataclass of accessors built from 01's `get_runtime` (`ApiContext.from_runtime`, the production path of `create_app()`) or from fixtures in tests. Every router module has module-level `_ctx: ApiContext | None` and `def configure(ctx)`; routers never import `app.runtime`/`app.main` (the process starts as `__main__`; a second import yields an empty module — old bot `test_api.py:5-10`).
+- **`queries.py`** holds every SELECT used by the API, Telegram and exports. Pure functions `(db, …) -> rows`, no FastAPI imports. Stored times are INTEGER unix seconds; conversion to ISO happens only in the response models and Telegram formatters (02 §B1).
+- **`hub.py`** (`StreamHub`) drives SSE: the DB is the single source of truth; producers only *nudge* (`hub.nudge()`), the hub polls `scores`/`events` rowid watermarks (every `STREAM_POLL_SEC` or immediately on nudge) and fans out to subscriber queues. No message is ever fabricated in memory that is not already in SQLite; a reconnect replays from SQLite (§3.5).
+- **`app/alerts/`**: `alert_dispatch` (01, Phase 0, 02 §D3) reads `events WHERE alerted_at IS NULL`, applies `routing.route_for(row)` (§2.4 — data owned here), renders `templates.render(row)` (§8.5), sends, and sets `alerted_at`; restart-safe, exactly-once per row, `ops_exempt` (02 §E1). `dereg_watch` and `needs_review_digest` are this spec's jobs (§2.5, §2.6, job table §6.1).
+- **`commands.py`** builds `TelegramCommandHandlers` from `queries.py`, `manual_service.py` (product/note/flag writes), 11's domain functions (`app.integrity.team`, `owner_admin`, `review`; 02 §H3) and 16's `app/control.py` (pause/resume, 02 §B12); the transport (`telegram.py`) is ported verbatim except the handler dataclass, dispatch table, chat allowlist, `setMyCommands` list and its HTTP client (§8.4).
+
+### 2.2 Request flow (read tier)
+
+`GET /api/v1/scores/latest` → `scores.py` → `queries.latest_scores(db, spec=…, min_confidence=…, tier=…, include_prelaunch=…, include_insufficient=…, netuids=…)` → one SQL over `scores ⋈ subnets` (latest row per current occupant, 02 §H1) → INTEGER times converted with `to_iso` (02 §B1) → response model → JSON. No server-side caching; the feed and the exports carry ETags (§3.5). Every handler wraps DB access in `try/except` and returns `503 {"error": "db_unavailable"}` when `ctx.db()` is `None`; nothing raises into uvicorn.
+
+### 2.3 Mutation flow (authed tier)
+
+`POST /api/v1/manual/team` → router-level `Depends(require_auth)` + origin guard (§3.6) → pydantic body validation (422) → `app.integrity.team.add_member(db, netuid=…, name, role, profile_url, evidence_url, evidence_note=note, source='manual', created_by='api', verify=verified)` (11 §2.12; 11 resolves the current occupant, writes `team_members` and its own `team_member_added` event) → the returned `ActionResult` is mapped to HTTP by `app/api/errors.py::from_action_result` (§3.5 error table, e.g. `no_current_occupant` → 404) → `hub.nudge()` → `201 {ok: true, id, occupant_key, status, warning, event_id}`. Telegram `/team add` calls the *same* function with `created_by='telegram'`. The writes this spec owns (`manual_notes` product/note rows, `manual_flags`) go through `app/api/manual_service.py`, which also emits `manual_entry` (§3.3).
+
+### 2.4 Alert routing table (02 §D3/§D4 — data for 01's `alert_dispatch`)
+
+This section is the content of `app/alerts/routing.py` (`ROUTES: dict[str, Route]` + `route_for(row, now) -> str`), which 01 ships with the `alert_dispatch` job in Phase 0 (02 §D3); `test_routing_matches_catalog` (§9) pins it to 03 §3.9. Routes are 03's alert values: **`immediate`** (`yes`: Telegram now), **`digest`** (one line in the weekly digest, §2.6), **`none`** (`no`: stored only), **`direct`** (the emitter sent it itself and inserted the row with `alerted_at` set; never resent). Repeat suppression is **not** the dispatcher's job: every emitter writes 03's `dedupe_key`, and `ux_events_dedupe` turns a repeat into a no-op (02 §D2).
+
+**`route_for(row, now)`** — only rows with `alerted_at IS NULL` are routed; first match wins:
+1. `payload.backfilled = true` → `digest` (02 §D4; 17's history rows also arrive with `alerted_at` preset, 02 §J1).
+2. `event_type` not in `ROUTES` → `digest`, logged once per type (02 §D3: an unknown type never pages and never blocks the queue).
+3. The type's row below: a fixed route, or `immediate` iff its condition holds, else `digest`.
+4. An `immediate` result becomes `digest` when `severity` ranks below `ALERT_MIN_SEVERITY` (default `info`: never), or `digest_late` when `now − observed_at > ALERT_LATE_AFTER_HOURS·3600` (default 24 h — a page that late, e.g. after a Telegram outage or `ALERTS_ENABLED=false`, is noise; the row still reaches the digest).
+
+The dispatcher stores its decision in the same `UPDATE` that sets `alerted_at` (03 lets `payload` change while `alerted_at IS NULL`): `payload.alert_route ∈ {immediate, digest, digest_late, none, direct}`. `digest`, `digest_late` and `none` rows get `alerted_at = now` at once, so they never clog the `ix_events_unalerted` queue; an `immediate` row gets `alerted_at` when Telegram accepts the message.
+
+Rows in 03 §3.9 order; every catalogued type appears exactly once (03's severity column is not repeated):
+
+| event_type | route | condition for `immediate` / note |
+|---|---|---|
+| `netuid_reoccupied` | immediate | 17's history rows are `backfilled` → digest (rule 1) |
+| `occupant_activated` | none | |
+| `identity_changed` | immediate if … else digest | `severity = 'warning'` **and** `payload.source = 'chain'` **and** `payload.field ∈ {subnet_name, github_repo, subnet_url, discord}` (02 §D4). `owner_coldkey` changes are `info` → digest; owner swaps page through `red_flag_raised` |
+| `source_disagreement` | digest | |
+| `identity_junk` | digest | |
+| `registry_anomaly` | immediate if … else digest | 3rd consecutive day: rows with the same `payload.reason` and `payload.netuid` exist for both previous UTC days (`floor(observed_at/86400) − 1` and `− 2`) |
+| `emission_disabled` | digest | detection event; the page is `red_flag_raised` (02 §D4) |
+| `emission_reenabled` | digest | the page is `red_flag_cleared` |
+| `dereg_risk_entered` | digest | the page is `red_flag_raised` (`dereg_imminent`) |
+| `dereg_risk_cleared` | none | |
+| `dereg_proximity` | digest | watchlist pages come from `dereg_watch` (§2.5) |
+| `immunity_mismatch` | none | |
+| `gate_fit_degraded` | digest | |
+| `gate_model_broken` | immediate | |
+| `chain_constant_drift` | immediate | |
+| `tmc_schema_drift` | digest | |
+| `chain_sse_down` | immediate | |
+| `chain_sse_recovered` | immediate | |
+| `tmc_budget_degraded` | digest | budget page = `spend_cap_reached` (02 §D4) |
+| `repo_renamed` | none | |
+| `repo_moved` | digest | |
+| `repo_gone` | digest | the page is `red_flag_raised` (`repo_gone`) |
+| `repo_restored` | none | |
+| `repo_archived` | digest | |
+| `org_repo_archived` | digest | |
+| `identity_repo_changed` | immediate | |
+| `commit_spam_suspected` | digest | |
+| `site_down_7d` | digest | the page is `red_flag_raised` (02 §D4) |
+| `site_recovered` | digest | the page is `red_flag_cleared` |
+| `tls_expiring_14d` | digest | |
+| `site_parked` | immediate | |
+| `site_hijack_suspect` | immediate | |
+| `site_content_reset` | digest | |
+| `site_cross_domain_redirect` | digest | |
+| `docs_gone` | digest | |
+| `invite_expired` | digest | flag `stale_identity` pages |
+| `invite_dead` | digest | |
+| `inflated_community` | digest | the page is `red_flag_raised` |
+| `community_venue_changed` | digest | |
+| `silence_45d` | digest | the page is `red_flag_raised` |
+| `x_account_unresolved` | digest | |
+| `x_account_gone` | immediate | |
+| `x_handle_changed` | none | |
+| `x_budget_paused` | digest | every reason — 02 §D4 overrides 03's "yes if reason ∈ {pacing, provider_balance}"; the budget page is `spend_cap_reached` |
+| `x_budget_resumed` | none | |
+| `x_ctf_discrepancy` | digest | |
+| `feed_dead` | digest | |
+| `youtube_channel_resolved` | none | |
+| taxonomy events (the 16 types of 03 §3.9, `product_launch` … `other`) | immediate if … else digest | `severity = 'critical'` (negative, materiality 3, confirmed) |
+| `owner_control_change` | digest | the page is `red_flag_raised` (`owner_control_change`), 02 §D4 |
+| `owner_coldkey_swap_announced` | digest | |
+| `owner_hotkey_repointed` | digest | |
+| `owner_identity_churn` | immediate | |
+| `owner_perpetual_off` | digest | the page is `red_flag_raised` (`owner_extraction`) |
+| `owner_decaying_lock_added` | digest | |
+| `owner_lock_reduced` | digest | |
+| `owner_extraction_detected` | digest | the page is `red_flag_raised` (`owner_extraction`) |
+| `owner_key_compromise_override` | immediate | |
+| `owner_auto_lock_changed` | digest | |
+| `owner_cut_toggled` | digest | |
+| `owner_source_disagreement` | digest | |
+| `owner_position_unexplained` | digest | |
+| `owner_concentration` | digest | |
+| `owner_self_dealing_suspected` | digest | |
+| `owner_data_degraded` | immediate | |
+| `team_member_added`, `team_member_verified`, `team_member_rejected`, `team_member_delisted` | digest | |
+| `team_disclosure_changed` | digest | |
+| `tier_change` | immediate | |
+| `red_flag_raised` | immediate | |
+| `red_flag_cleared` | immediate | |
+| `score_jump` | immediate | 02 §D4 |
+| `insufficient_data` | digest | 02 §D4 |
+| `rank_instability` | digest | 02 §D4 |
+| `manual_entry` | none | |
+| `collector_paused` | none | |
+| `collector_resumed` | none | |
+| `rescore_requested` | none | |
+| `dereg_watch` | immediate | emitted by this spec (§2.5) |
+| `collector_failing` | immediate | |
+| `collector_recovered` | immediate | |
+| `service_recovered_unclean` | immediate | |
+| `spend_80pct` | immediate | |
+| `spend_cap_reached` | immediate | |
+| `spend_reset` | digest | |
+| `budget_override_set` | digest | |
+| `backup_failed` | immediate | 16 sends it direct (row preset) while the dispatcher is inactive (16 §2.13.2 rule c) |
+| `backup_mirror_missing` | immediate | |
+| `backup_mirror_failed` | immediate | |
+| `backup_stale` | immediate | |
+| `scoring_stalled` | immediate | |
+| `discord_gateway_fatal` | immediate | |
+| `backfill_done` | digest | |
+| `backfill_failed` | immediate | |
+| `disk_low` | immediate | |
+| `disk_critical` | direct | a row that still arrives with `alerted_at IS NULL` is marked `direct` without sending (no double page) |
+| `db_integrity_failed` | direct | same |
+| `schema_warning` | immediate | |
+| `retention_skipped` | digest | |
+
+**Delivery rules** (01 implements them in `alert_dispatch`; this spec owns them): each tick selects up to `ALERT_MAX_ROWS_PER_TICK` rows `WHERE alerted_at IS NULL ORDER BY id` (03's `ix_events_unalerted`), routes them, and sends the `immediate` ones oldest first, rendered by `templates.render(row)` (§8.5). More than `ALERT_BATCH_THRESHOLD` immediate rows in one tick are sent as batched messages (header `📬 <b>{k} alerts</b>`, one line per row, chunked at 4,000 characters, §2.7), which keeps a post-outage burst inside Telegram's per-chat rate. A Telegram `400` for one row (e.g. malformed HTML) is retried once as plain text (tags stripped); if that fails too, the row gets `payload.alert_failed = true` and `alerted_at` is set, so one poisoned row cannot block the queue. Network errors, `5xx` and `429` never mark a row: the tick stops and the next tick retries (rule 4 eventually moves stale rows to the digest).
+
+### 2.5 `dereg_watch`
+
+Job `dereg_watch` (§6.1) evaluates, every `DEREG_WATCH_INTERVAL_MIN`, each `netuid ∈ WATCHLIST_NETUIDS` that has a current occupant (`subnets`), using the newest `chain_ticks` row of that netuid (05) and the occupant's `dereg_safety` raw row (05; already a final [0,1] value, 12 registry row 3) read with 03's `metric_at(occupant_key, 'dereg_safety', now, spec_version=SPEC_VERSION, freshness_s=METRICS['dereg_safety'].freshness_s)` (02 §B5):
+
+```
+blocks_left = subnets.network_registered_at + NETWORK_IMMUNITY_PERIOD_BLOCKS − tick.block_number
+immune      = blocks_left > 0                 # local rule (master §5), not TMC's `immune` flag (false before start)
+reason      = "bottom3"         if not immune and tick.deregistration_risk == 1
+            = "safety_metric"   elif not immune and dereg_safety is not None and dereg_safety <= DEREG_WATCH_SAFETY_MAX (0.10)
+            = "immunity_ending" elif immune and blocks_left <= DEREG_WATCH_IMMUNITY_WARN_DAYS * 7200   # 7,200 blocks ≈ 1 d at 12 s
+            = None              otherwise
+```
+`moving_price_rank` = 1-based rank of the netuid by `subnet_moving_price` ascending among the newest ticks (≤ 30 min old) of all non-immune netuids (null when its price is null or it is immune). When `reason` is set: `emit_event(event_type='dereg_watch', severity='warning', source='api', occupant_key, netuid, payload={netuid, name, reason, moving_price_rank, immune, blocks_left_immunity: blocks_left if immune else null, dereg_safety}, dedupe_key=f"{occupant_key}|{reason}|{now // 86400}")` — 03's pattern `occ|reason|day`, so a watched subnet pages at most once per reason per UTC day. If the newest tick is older than 30 min (SSE recorder and REST fallback both down) that netuid is skipped and logged; the job never fabricates a risk. SQLite reads only, no provider calls.
+
+### 2.6 Weekly needs-review digest (also the delivery of the `digest` route)
+
+Cron job `needs_review_digest` (§6.1; default Monday 08:00Z via `NEEDS_REVIEW_DIGEST_DAY`/`NEEDS_REVIEW_DIGEST_HOUR_UTC`; checklist D5) sends one message, chunked (§2.7), with three sections:
+1. **Needs review** — the `/needsreview` reply (§8.5), built by `queries.needs_review` (§8.3): 04's computed list, 11's open review queue, team, product and blocked-site buckets.
+2. **Digest events** — every event routed to the digest since the previous digest: rows with `id > job_state('needs_review_digest','last_event_id')` and (`payload.alert_route ∈ {digest, digest_late}` or `payload.backfilled = true`), grouped by `event_type`: a count, then up to 3 lines rendered with the §8.5 templates (backfilled rows are only counted, marked `(history)`); a type with more rows ends with `… +k more · {ui}/events?type=<type>`.
+3. A footer with the `{ui}/events` link.
+
+After Telegram accepts the last chunk the watermark becomes `min(MAX(events.id), (SELECT MIN(id) FROM events WHERE alerted_at IS NULL) − 1)`, so rows the dispatcher has not routed yet are never skipped. The digest never touches `alerted_at` (the dispatcher set it). Before Phase 11 digest rows are stored and marked but only counted in 16's daily ops digest. Telegram `/digest` sends sections 2–3 on demand without moving the watermark.
+
+### 2.7 Telegram message rules
+
+- HTML `parse_mode`; every dynamic string passes through `html.escape` (`esc()`).
+- Tables are rendered inside `<pre>…</pre>` with fixed-width columns; links are placed **outside** `<pre>` (Telegram does not render anchors inside `pre`).
+- `chunk(text, limit=4000)` (`app/notifications/format.py`, shipped in Phase 0 with the dispatcher; 16's ops digest uses it too) splits on line boundaries and closes/reopens `<pre>` around the cut; the first chunk carries the keyboard. Length is counted in UTF-16 code units of the HTML source (never less than Telegram's post-parse count), so no message exceeds Telegram's 4,096-character limit.
+- Every Bot API call (alerts, replies, `getUpdates`) goes through `Http.request("telegram", …)` (02 §G1; the limiter key of 01's provider table — 02 §G1's provider list omits Telegram, flagged in §11 — at rate `TELEGRAM_MAX_MSG_PER_MIN/60`, burst 5). The bot token is part of the URL path, so `Http`'s request log line for this provider must pass the path through the transport's `_redact` (token → `***`). A `429` is honoured via `Retry-After` by the limiter; an alert row whose send fails keeps `alerted_at = NULL` and is retried next tick.
+- Inline-keyboard `callback_data` stays ≤ 64 bytes (Telegram limit); confirmations that need more arguments carry an 8-character nonce (§8.4).
+
+---
+
+## 3. Data contract
+
+### 3.1 Tables read (03's DDL is authoritative, 02 §B7; every stored time is INTEGER unix seconds, 02 §B1)
+
+| table | columns used | notes |
+|---|---|---|
+| `subnets` | `netuid, occupant_key, network_registered_at, name, symbol, status, is_active, immune, owner_coldkey, owner_hotkey, head_block, website_url, github_url, docs_url, discord_url, telegram_url, x_handle, updated_at` | current occupant per netuid with 04's resolved identity columns |
+| `occupants` | `occupant_key, netuid, network_registered_at, status, name, first_seen_at, last_seen_at, deregistered_at, predecessor_key, successor_key` | history lookups for deregistered occupants |
+| `scores` | `id, occupant_key, netuid, as_of, spec_version, run_kind, status, quality, velocity, composite_raw, composite, composite_smoothed, pillar_scores, pillar_coverage, confidence, insufficient_data, tier, red_flags, regime, explain, computed_at, backfilled, shadow` | 02 §B6: `as_of` = slot instant (00:00Z official, 06/12/18:00Z provisional), `computed_at` = run instant, both ISO only at the boundary; no `observed_at` column. `red_flags` = sorted JSON array of flag **names**, e.g. `["dereg_imminent"]`; multiplier/since/state/origin/detail come only from `explain.flags`. `regime` = label string; `pillar_scores` `{P1..P6: float\|null}`; `explain` per 12 §2.10 |
+| `metric_values` | `stage='norm'` rows only (02 §H2): `occupant_key, metric_key, as_of, spec_version, value (= m), value_json {raw, status, reason, raw_as_of, raw_observed_at, age_s, src, fallback, cohort_n}, observed_at`; plus `value_json.evidence_url` of the selected `stage='raw'` row for the evidence link | evidence panel of `/subnets/{netuid}` (§3.5) |
+| `red_flag_state` | `occupant_key, flag, spec_version, active, human, sticky, raised_at, false_since, last_eval, detail_json` | `/flags`, and the 409 `flag_not_active` check (02 §D5); `state`/`origin` derived per 12 §2.8 |
+| `events` | `id, occupant_key (NULL for system events), netuid, event_type, severity, event_at, observed_at, source, payload, dedupe_key, alerted_at` | `severity ∈ {info, warning, critical}` (02 §B2); `/events`, SSE, digest |
+| `collector_runs` | `job, started_at, finished_at, ok, error` | passive service probes (newest ok run per job) |
+| `team_members` | `id, occupant_key, netuid, name, role, profile_url, evidence_url, evidence_count, status, source, verified_by, verified_at, rejected_at, reject_reason, first_seen_at, last_checked_at` | `status ∈ {candidate, verified, rejected}`, `source ∈ {subnetalpha, legacy, manual, llm}` (02 §H3); read via 11's `team.list_members`, written only by 11 |
+| `manual_notes` | `id, occupant_key, kind, value, body, evidence_url, created_at, created_by` | free text lives in `body`; product status = latest `product_status` row (`value ∈ {none, waitlist, beta, live}`, NULL = cleared); latest `team_disclosure` row (`anonymous`\|`clear`) |
+| `manual_flags` | `id, occupant_key, flag, state, evidence_url, note, set_by, set_at` | append-only; latest row per `(occupant_key, flag)` is authoritative; `flag ∈ {owner_extraction, key_compromise, owner_control_change}` (02 §D5) |
+| `review_queue`, `owner_event_whitelist` | — | only through 11's `review.list_open` / `owner_admin.*` |
+| `control_state` | — | only through 16's `app/control.py` (02 §B12) |
+| `web_checks` | `occupant_key, url, kind, is_primary, check_day_ts, status_class, robots_allowed` | `blocked_sites` digest bucket (§8.3) |
+| `chain_ticks` | newest per `netuid`: `netuid, block_number, occupant_key, observed_at, deregistration_risk, subnet_moving_price` | `dereg_watch` only |
+| `job_state` | `('needs_review_digest', 'last_event_id')` | digest watermark (read + write) |
+
+### 3.2 Tables written
+
+| table | operation | by |
+|---|---|---|
+| `manual_notes` | INSERT (`kind ∈ {product_status, note}`; text in `body`; `ref_event_id` on a reoccupation ack) | `manual_service.set_product`, `manual_service.add_note`, registry ack route |
+| `manual_overrides` | only via 04's `add_override` / `set_override_status` (04 §3.3) | registry write router |
+| `manual_flags` | INSERT (append-only) under 02 §D5 (§3.5) | `manual_service.set_flag` |
+| `team_members`, `review_queue`, `owner_event_whitelist`, `manual_notes(team_disclosure)`, override `manual_flags` | only via 11's domain functions (11 §2.12) | manual/review routers, Telegram |
+| `control_state` | only via 16's `app/control.py::pause()/resume()` (02 §B12) | control router, Telegram `/pause` `/resume` |
+| `events` | INSERT through 03's `emit_event`, `source='api'` (`manual_entry`, `collector_paused`, `collector_resumed`, `rescore_requested`, `dereg_watch`) | manual service, control router, `dereg_watch` |
+| `events` | UPDATE `alerted_at` + `payload.alert_route` (03 allows both while `alerted_at IS NULL`) | 01's `alert_dispatch` applying §2.4 |
+| `job_state` | digest watermark | `needs_review_digest` |
+| filesystem | nothing — the app never writes `data/control/*.paused` (02 §B12) | — |
+
+### 3.3 Events emitted by this spec (03 §3.9 names, payload keys and dedupe patterns)
+
+| `event_type` | severity | `occupant_key` | payload | `dedupe_key` |
+|---|---|---|---|---|
+| `manual_entry` | info | occupant | `{kind: "product"\|"note"\|"flag", by: "api"\|"telegram"\|"cli", row_id: int, summary: str, evidence_url: str}` | NULL |
+| `collector_paused` | info | NULL | `{collector: <target>, by, reason}` (+ `members[]`) | NULL |
+| `collector_resumed` | info | NULL | `{collector: <target>, by}` (+ `file_pause_active` when an emergency file remains) | NULL |
+| `rescore_requested` | info | NULL | `{as_of: int\|null, spec_version, shadow: bool, run_id, by}` | `run_id` |
+| `dereg_watch` | warning | occupant | `{netuid, name, reason: "bottom3"\|"safety_metric"\|"immunity_ending", moving_price_rank: int\|null, immune: bool, blocks_left_immunity: int\|null, dereg_safety: float\|null}` | `{occ}\|{reason}\|{day}` |
+
+All with `source='api'` (02 §B9). Team/owner/review actions emit 11's own events (`team_member_*`, `team_disclosure_changed`, `owner_key_compromise_override`), so `manual_entry.kind='team'` is no longer used.
+
+### 3.4 Metric keys produced
+
+None. `/health` and `/api/health/services` are diagnostics, not `metric_values`.
+
+### 3.5 Endpoint catalogue
+
+All timestamps are ISO-8601 UTC with `Z` (`to_iso`, 02 §B1), except inside `explain`, which is passed through verbatim (its `as_of`, `prev.as_of` and `flags[].since` stay INTEGER unix seconds, 12 §2.10). Scores are floats rounded to 2 dp in JSON (pillars and `m` to 3 dp); `null` means "not computable" (§4). Errors are `{"error": "<snake_code>", "detail": "<human>"}` with a 4xx/5xx status. Unknown query params are ignored; booleans accept `1|0|true|false`.
+
+**Route inventory** (the complete HTTP surface; semantics owner in the 4th column — this spec fixes transport, tier and error mapping for all of them):
+
+| method | path | tier | semantics | Phase |
+|---|---|---|---|---|
+| GET | `/health` | open | 01 builds the body (02 §G6) | 0 |
+| GET | `/api/health/services` | open | here (01 ships the Phase-0 probes) | 0 / 11 |
+| GET | `/api/v1/jobs` | open | 01 §2.9 | 0 |
+| POST | `/api/v1/control/pause/{target}`, `/api/v1/control/resume/{target}` | authed | 16 `app/control.py` (02 §B12) | 0 |
+| POST | `/api/v1/control/run/{job_id}`, `/api/v1/control/reload-config` | authed | 01 §2.9 | 0 |
+| POST | `/api/v1/control/budget/override` | authed | 16 §2.10 | 0 |
+| GET | `/api/v1/registry/occupants`, `/api/v1/registry/{netuid}` | open | 04 §3.3 read API (`active_occupants`, `current_occupant`, `resolved`) | 11 |
+| GET | `/api/v1/registry/needs-review` | open | 04 §2.10 `compute_needs_review` | 11 |
+| GET | `/api/v1/registry/overrides`, `/api/v1/registry/overrides/{id}` | open | 04 `manual_overrides` (03 DDL) | 11 |
+| POST | `/api/v1/registry/overrides` (alias `/api/v1/manual/override`) | authed | 04 §3.3 `add_override` | 11 |
+| POST | `/api/v1/registry/overrides/{id}/status` | authed | 04 §3.3 `set_override_status` | 11 |
+| POST | `/api/v1/registry/refresh` | authed | 01 §2.9 run-now of 04's `registry_occupants` / `registry_identity` | 11 |
+| POST | `/api/v1/registry/reoccupied/{event_id}/ack` | authed | 04 §2.10 reason 2 (`manual_notes.ref_event_id`) | 11 |
+| GET | `/api/v1/scores/latest`, `/api/v1/scores/history` | open | here (feed, 02 §H1) | 11 |
+| GET | `/api/v1/subnets`, `/api/v1/subnets/{netuid}` | open | here (evidence, 02 §H2) | 11 |
+| GET | `/api/v1/events` | open | here | 11 |
+| GET | `/api/v1/matrix.csv`, `/api/v1/export/scores.json` | open | here | 11 |
+| GET | `/api/v1/stream` | open | here | 11 |
+| GET | `/api/v1/quant/results`, `/api/v1/quant/results/{file}` | open | here (files: 13) | 11 |
+| GET | `/api/v1/review` | open | 11 `review.list_open` | 11 |
+| POST | `/api/v1/review/{id}/resolve` | authed | 11 `review.resolve_review` | 11 |
+| POST | `/api/v1/manual/team`, `/team/{id}/verify`, `/team/{id}/reject`, `/team/disclosure` | authed | 11 `team.*` (02 §H3) | 11 |
+| POST | `/api/v1/manual/product`, `/manual/note`, `/manual/flag` | authed | here (flag rules 02 §D5) | 11 |
+| POST | `/api/v1/manual/owner/whitelist`, `/owner/whitelist/{id}/retire`, `/owner/compromise` | authed | 11 `owner_admin.*` | 11 |
+| POST | `/api/v1/control/rescore` | authed | 12 §2.13 rule 5 | 11 |
+
+Every route is GET or POST (CORS allows only those, §3.6); 11's draft `DELETE …/whitelist/{id}` is exposed as `POST …/whitelist/{id}/retire`.
+
+#### GET `/health` (open) — built by 01, served here
+
+The body is exactly 01's `/health` builder output (01 §2.9, 02 §G6); this spec adds no field and defines no other shape. Fields this spec's consumers read: `status ∈ {ok, degraded, initializing}`, `degraded_reasons[]` (01's vocabulary), `version`, `kill_switch_active`, `scoring_killed`, `collectors.<job>.{last_run, last_ok, last_error, consecutive_failures, paused}`, `tasks.<task>.{connected, last_beat}`, `spend.<group>.{usd, cap_usd, pct, paused, reserved_usd}` (16's `snapshot()`), `db.{size_bytes, last_backup, last_backup_age_hours}`, `ops.pause_all` (16). Excerpt (illustrative only):
+```json
+{"status": "degraded", "degraded_reasons": ["collector_failing:github_activity"], "version": "0.1.0+3fa2c1d",
+ "kill_switch_active": false, "scoring_killed": false,
+ "spend": {"x": {"usd": 3.21, "cap_usd": 25.0, "pct": 0.128, "paused": false, "reserved_usd": 0.0}}}
+```
+16's deploy gate reads only `status` and `version` and passes on `ok|degraded` (02 §G6). Compact `JSONResponse`; never 500s (01).
+
+#### GET `/api/health/services` (open; cached `HEALTH_SERVICES_CACHE_SEC`)
+
+`{"timestamp": "…Z", "cached": false, "services": {<key>: {"ok": bool, "state": "ok"|"fail"|"disabled", "name": str, "detail": str, "last_check": "…Z", "latency_ms": int|null}}}` — 01's Phase-0 shape plus `cached`/`state`; `ok = (state != "fail")` so a disabled optional provider is not a red light. Keys follow 01 (provider names). **Active** probes make one cheap request through `Http.request(provider, …)`; **passive** probes make none (they read the limiter snapshot, `/health` and `collector_runs`), so the page never spends TMC/Discord/X budget:
+
+| key | kind | probe | ok when | detail example |
+|---|---|---|---|---|
+| `database` | local | `PRAGMA journal_mode`; `SELECT MAX(as_of) FROM scores WHERE spec_version = :spec` | both succeed | `"wal · latest slot 2026-09-22T12:00Z"` |
+| `scheduler` | local | `rt.scheduler.running` | true | `"41 jobs · 3 unavailable"` |
+| `disk` | local | `shutil.disk_usage(DATA_DIR)` | free ≥ `DISK_FREE_MIN_GB` | `"41.2 GB free"` |
+| `backup` | local | 16's `latest_backup_age_hours(DB_BACKUP_DIR)` (manifest `taosentinel-*.json`, `created_at`) + `job_state('backup_daily','last_result').mirror` | age ≤ `DB_BACKUP_STALE_HOURS` and mirror ∈ {`ok`, `off`} | `"taosentinel-20260923T033012Z · 8.2 h · mirror ok"` |
+| `telegram` | active | `getMe` via provider `telegram` (ported `main.py:2325-2366`) | 200 and `result.username` | `"@taosentinel_bot"`; no token/chat → `disabled` |
+| `github` | active | `GET https://api.github.com/rate_limit` (quota-free) | 200 | `"4812/5000 · resets 13:00Z"`; no PAT → `disabled` |
+| `subtensor_rpc` | active | JSON-RPC `system_health` | 200, no `error` | `"peers 42 · syncing false"` |
+| `anthropic` | active | `GET https://api.anthropic.com/v1/models` (`x-api-key`, `anthropic-version: 2023-06-01`; no token cost) | 200 | `"ok · llm $12.44/$60"`; `LLM_ENABLED=false` → `disabled`; `spend.llm.paused` → `fail` `"budget paused"` |
+| `tmc` | passive | `rt.limiter.snapshot()['tmc']` + newest ok `collector_runs` row of a 05 REST job | not penalised and last ok ≤ 2 h | `"hour 12/500 · month 3,120/90,000 · last ok 14 min ago"` |
+| `tmc_sse` | passive | `/health.tasks.chain_sse` | connected and `now − last_beat ≤ 120 s` | `"last block 7,201,155 · 9 s ago"` |
+| `discord` | passive | newest ok run of `discord_6h` | ≤ 7 h old | `"last ok 2 h ago"`; `DISCORD_ENABLED=false` → `disabled` |
+| `x` | passive | `/health.spend.x` + newest ok run of 09's `x_team_poll` | not paused and ≤ 26 h old | `"twitterapi_io · last ok 4 h ago · $3.21/$25"`; `X_PROVIDER=null` → `disabled` |
+
+Every active probe is `asyncio.wait_for(…, HEALTH_PROBE_TIMEOUT_SEC)` inside `try/except` → `state: "fail", detail: str(exc)`; probes run concurrently (`asyncio.gather(return_exceptions=True)`).
+
+#### GET `/api/v1/scores/latest` (open) — the trading contract (02 §H1; spec 15 consumes it unchanged)
+
+Params: `spec` (default `SCORING_SPEC_VERSION`, the read-only alias of 01's `SPEC_VERSION`, 02 §F2), `min_confidence` (float 0–1, default 0.0), `tier` (`A|B|C|D|F`, optional), `include_prelaunch` (default false), `include_insufficient` (default false — rows with `confidence < 0.4` are dropped, master §7.7, 02 §H1), `netuids` (comma list, optional).
+
+```json
+{
+  "as_of": "2026-09-22T12:00:00Z",
+  "computed_at": "2026-09-22T12:15:07Z",
+  "generated_at": "2026-09-22T12:40:03Z",
+  "run_kind": "provisional",
+  "spec_version": "ts-1.0",
+  "ttl_seconds": 25200,
+  "stale": false,
+  "regime": "TRENDING",
+  "count": 118,
+  "scores": [
+    {"netuid": 64, "occupant_key": "64:4123456", "name": "Chutes", "status": "active",
+     "quality": 84.1, "velocity": 71.0, "composite": 82.4, "composite_raw": 81.9,
+     "confidence": 0.91, "tier": "A", "red_flags": [],
+     "pillars": {"P1": 0.81, "P2": 0.90, "P3": 0.60, "P4": 0.70, "P5": 0.78, "P6": 0.62},
+     "as_of": "2026-09-22T12:00:00Z", "computed_at": "2026-09-22T12:15:07Z"},
+    {"netuid": 47, "occupant_key": "47:4000001", "name": "Foo", "status": "active",
+     "quality": 31.0, "velocity": 22.4, "composite": 18.7, "composite_raw": 30.2,
+     "confidence": 0.55, "tier": "D", "red_flags": ["dereg_imminent"],
+     "pillars": {"P1": 0.21, "P2": 0.35, "P3": 0.40, "P4": 0.30, "P5": 0.25, "P6": 0.20},
+     "as_of": "2026-09-22T12:00:00Z", "computed_at": "2026-09-22T12:15:07Z"}
+  ]
+}
+```
+- One row per **current** occupant (`JOIN subnets`): its latest `scores` row for `spec` (max `as_of`, 02 §H1). `as_of` is the slot instant, `computed_at` the run instant (02 §B6); `generated_at` is the response build time.
+- `composite` = `composite_smoothed`; `quality` = Health (JSON keeps `quality`, UI/Telegram label it "Health"); `composite_raw` = the unflagged composite. `red_flags` = `scores.red_flags` verbatim: sorted flag **names** (02 §B6); multipliers are on `/subnets/{netuid}`.
+- A row may carry null `composite`/`quality`/`tier` (every pillar uncovered, pre-launch); 15 treats that netuid as neutral instead of rejecting the batch (02 §H1).
+- `ttl_seconds` = `SCORE_FEED_TTL_SEC` (25,200 = the 6-h cadence plus run latency); `stale = (now − max as_of) > ttl_seconds` **or** `./SCORING_KILLED` exists. When killed, the last good rows are still returned with `stale: true` (master §11).
+- Top-level `as_of`/`computed_at`/`run_kind`/`regime` are those of the newest returned row; a per-row `as_of` may be older (an occupant skipped by a provisional run keeps its older row).
+- Sorted by `composite` desc, nulls last, then `netuid`.
+- No rows (unknown `spec`, or everything filtered) → `200 {as_of: null, computed_at: null, count: 0, scores: [], stale: true, …}` — never 404/503, so the consumer's "absent ⇒ neutral" path handles it (15's `FeedPayload.scores` allows `min_length=0`, 02 §H1).
+- Headers `Cache-Control: no-store`, `ETag: W/"<spec>:<max as_of>:<max scores.id>:<params hash>"`; `If-None-Match` → 304 (optional for consumers, 02 §H1).
+
+SQL (`queries.latest_scores`; served by 03's `ix_scores_latest`):
+```sql
+WITH latest AS (
+  SELECT occupant_key, MAX(as_of) AS as_of FROM scores WHERE spec_version = :spec GROUP BY occupant_key
+)
+SELECT s.id, s.occupant_key, s.netuid, sub.name, s.status, s.as_of, s.computed_at, s.run_kind, s.quality, s.velocity,
+       s.composite_smoothed, s.composite_raw, s.confidence, s.tier, s.red_flags, s.pillar_scores, s.regime
+FROM scores s
+JOIN latest l    ON l.occupant_key = s.occupant_key AND l.as_of = s.as_of
+JOIN subnets sub ON sub.occupant_key = s.occupant_key          -- current occupants only
+WHERE s.spec_version = :spec
+  AND (:include_prelaunch = 1 OR s.status = 'active')
+  AND s.confidence >= :min_confidence
+  AND (:include_insufficient = 1 OR s.confidence >= 0.4)
+  AND (:tier IS NULL OR s.tier = :tier)
+ORDER BY s.composite_smoothed IS NULL, s.composite_smoothed DESC, s.netuid;
+-- :netuids, when given, appends AND s.netuid IN (…)
+```
+
+#### GET `/api/v1/scores/history` (open)
+
+Params: `occupant` (required; an `occupant_key` or a bare netuid → the *current* occupant via `subnets`), `days` (int 1–730, default 90), `spec` (default), `official_only` (default true → one point per day).
+```json
+{"occupant_key": "64:4123456", "netuid": 64, "spec_version": "ts-1.0", "days": 90,
+ "points": [{"as_of": "2026-06-25T00:00:00Z", "computed_at": "2026-06-25T00:15:04Z", "run_kind": "official",
+             "composite": 74.2, "composite_raw": 75.0, "quality": 77.9, "velocity": 55.1, "confidence": 0.82, "tier": "B",
+             "red_flags": [], "pillars": {"P1": 0.7, "P2": 0.8, "P3": null, "P4": 0.6, "P5": 0.7, "P6": 0.5}, "regime": "CHOPPY"}]}
+```
+Ascending by `as_of`. 404 `unknown_occupant` if neither form resolves.
+
+#### GET `/api/v1/subnets` (open) — matrix source
+
+Params: `include_prelaunch` (default false), `include_deregistered` (default false), `spec`.
+Returns registry ⋈ latest score ⋈ 7-day official history:
+```json
+{"as_of": "2026-09-22T12:00:00Z", "spec_version": "ts-1.0", "stale": false, "subnets": [
+  {"netuid": 64, "occupant_key": "64:4123456", "name": "Chutes", "symbol": "SN64", "status": "active", "immune": false,
+   "network_registered_at": 4123456, "links": {"website": "https://chutes.ai", "github": "https://github.com/rayonlabs/chutes", "docs": null, "discord": "https://discord.gg/…", "telegram": null, "x": "chutes_ai"},
+   "score": {"composite": 82.4, "quality": 84.1, "velocity": 71.0, "confidence": 0.91, "tier": "A", "red_flags": [], "pillars": {"P1": 0.81, "P2": 0.9, "P3": 0.6, "P4": 0.7, "P5": 0.78, "P6": 0.62}, "as_of": "2026-09-22T12:00:00Z", "insufficient_data": false},
+   "spark_7d": [78.1, 78.9, 79.4, 80.2, 81.0, 81.7, 82.4]
+  }]}
+```
+`spark_7d` = the last 7 `official` `composite_smoothed` values ascending by `as_of` (fewer if history is shorter; never padded). `score: null` for occupants never scored. `as_of`/`stale` as in the feed. Insufficient rows are **included** here with `insufficient_data: true` (the UI hides them by default).
+
+#### GET `/api/v1/subnets/{netuid}` (open)
+
+Params: `occupant` (optional `occupant_key`, to view a deregistered predecessor), `events_limit` (default 20, max 100), `spec`.
+```json
+{"netuid": 64, "occupant_key": "64:4123456", "name": "Chutes", "status": "active", "immune": false, "tenure_days": 412.3,
+ "links": {…same as list…}, "owner_coldkey": "5F…",
+ "score": {"as_of": "2026-09-22T12:00:00Z", "computed_at": "2026-09-22T12:15:07Z", "run_kind": "provisional", "composite": 82.4, "composite_raw": 81.9,
+           "quality": 84.1, "velocity": 71.0, "confidence": 0.91, "tier": "A", "regime": "TRENDING", "pillars": {…}, "coverage": {…},
+           "red_flags": [{"flag": "dereg_imminent", "multiplier": 0.6, "since": "2026-09-10T00:00:00Z", "state": "active", "origin": "auto", "human": false, "sticky": false}],
+           "explain": { /* verbatim scores.explain */ }},
+ "evidence": [
+   {"metric_key": "active_authors_28d", "pillar": "P2", "m": 0.95, "raw": 9, "raw_status": "ok", "reason": null,
+    "raw_as_of": "2026-09-22T00:00:00Z", "age_s": 43200, "freshness_s": 172800, "fresh": true, "fallback": false,
+    "src": "github", "evidence_url": "https://github.com/orgs/rayonlabs/people"},
+   {"metric_key": "x_followers", "pillar": "P5", "m": 0.0, "raw": 0, "raw_status": "absent", "reason": "no_x_account", "…": "…"}
+ ],
+ "events": [{"id": 9912, "event_type": "release_upgrade", "severity": "info", "event_at": "…Z", "observed_at": "…Z", "source": "llm", "payload": {…}}],
+ "site": {"url": "https://chutes.ai", "last_event": "site_recovered", "reason": "up", "at": "…Z"},
+ "team": [{"id": 3, "name": "Jon Durbin", "role": "founder", "profile_url": "https://x.com/…", "evidence_url": "https://…", "evidence_count": 2, "status": "verified", "source": "manual", "verified_by": "rudolf", "verified_at": "…Z", "last_checked_at": "…Z"}],
+ "disclosure": null,
+ "product": {"status": "live", "evidence_url": "https://chutes.ai/app", "note": null, "set_at": "…Z", "set_by": "telegram"},
+ "notes": [{"id": 7, "text": "…", "evidence_url": "https://…", "created_at": "…Z", "created_by": "api"}],
+ "manual_flags": [{"flag": "owner_extraction", "state": "cleared", "evidence_url": "…", "set_at": "…Z", "set_by": "api"}],
+ "history_90d": [ /* same shape as /scores/history points */ ]}
+```
+- `score.red_flags` here are objects built from `explain.flags` (the only store of multiplier/since/state/origin, 02 §B6; `since` converted to ISO); `tenure_days = (subnets.head_block − network_registered_at)·12/86400`.
+- **`evidence`** (02 §H2, 12 §2.15 item 8) = the `stage='norm'` rows of the displayed score's slot (`metric_values WHERE stage='norm' AND spec_version=:spec AND occupant_key=:occ AND as_of=:score_as_of`), i.e. exactly what scoring used, in 12's registry order (`app.features.registry.scored("P1")…scored("P6")`; `pillar` = `PILLAR_OF[metric_key]`). `m` = `value`; `raw` = `value_json.raw`; `raw_status` = `value_json.status` (missing → `"none"`); `reason`, `age_s`, `fallback`, `src` = `value_json` keys. `freshness_s` = `METRICS[metric_key].freshness_s` (per metric, not per pillar); `fresh` = `raw_as_of` not null and `now − raw_as_of ≤ freshness_s`. `evidence_url` = `value_json.evidence_url` of the selected raw row (`stage='raw'`, key = `metric_key`, or its `fallback_key` when `fallback`, `as_of = raw_as_of`) when present, else null. Rendering (§4): `raw_status='absent'` → "verifiable absence"; `failed`/`none` → "collection failure"; `not_applicable` → "n/a". A value of 0.0 by itself says nothing about absence.
+- `site` = the newest `site_down_7d`/`site_recovered` event of the occupant's primary website (07): for `site_recovered`, `reason = payload.reason` (`up` \| `target_changed` \| `target_retired`, 07 §3.5), shown on the page so a flag cleared because the target changed is not mistaken for a recovery; `null` when neither event exists.
+- `team` = 11's `team.list_members(db, occupant_key=…)`; `disclosure` = the latest `manual_notes(kind='team_disclosure')` `{value, set_at, set_by}` or null; `product.note` and `notes[].text` come from `manual_notes.body`.
+- 404 `unknown_netuid` when the netuid has no current occupant and no `occupant` param; 404 `unknown_occupant` for an unknown `occupant`.
+
+#### GET `/api/v1/events` (open)
+
+Params: `since` (ISO or relative `7d|24h|30m`, default `7d`), `until` (ISO, optional), `severity` (`info|warning|critical`, comma list; default all), `type` (comma list of `event_type`), `netuid` (int), `occupant` (occupant_key), `limit` (1–1000, default 200), `before_id` (int, keyset pagination).
+```json
+{"count": 1, "next_before_id": 9912,
+ "events": [{"id": 9912, "netuid": 64, "occupant_key": "64:4123456", "name": "Chutes", "event_type": "tier_change", "severity": "info", "source": "scoring",
+             "event_at": "…Z", "observed_at": "…Z", "payload": {"from": "B", "to": "A", "composite_smoothed": 76.8}, "alerted_at": "…Z"}]}
+```
+Ordered by `observed_at DESC, id DESC` (03's `ix_events_observed`). System events have `netuid: null`, `occupant_key: null`. 422 `bad_since` on an unparsable `since`.
+
+#### GET `/api/v1/matrix.csv` (open) and GET `/api/v1/export/scores.json` (open)
+
+Params: `spec`, `include_prelaunch`, `include_insufficient`. CSV header (fixed order):
+```
+netuid,occupant_key,name,status,tier,composite,composite_raw,quality,velocity,confidence,P1,P2,P3,P4,P5,P6,red_flags,as_of,computed_at,spec_version
+```
+`red_flags` is the `;`-joined names. Empty cells for `null`. `Content-Disposition: attachment; filename="taosentinel-matrix-<as_of date>.csv"`.
+`scores.json` returns exactly the `/api/v1/scores/latest` body (same params) with `Content-Disposition: attachment`.
+Both carry `ETag: W/"<sha256(spec|max(as_of)|max(scores.id)|params)[:16]>"` and `Cache-Control: public, max-age=<EXPORT_CACHE_MAX_AGE_SEC>`; `If-None-Match` match → `304`. Bodies are generated with `csv.writer`/`json` into a `StreamingResponse` (≈ 130 rows; no file is written).
+
+#### GET `/api/v1/stream` (open) — SSE
+
+Params: `types` (comma of `score|event|health`, default `score,event`); header `Last-Event-ID` honoured (also `?last_event_id=` for clients that cannot set it).
+Response `text/event-stream`, headers `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no` (ported `main.py:3212-3225`; ACAO left to CORSMiddleware). **Caps:** `STREAM_MAX_CONNECTIONS` (8) concurrent subscribers, else `503 {"error":"too_many_stream_connections"}`; per-subscriber queue 256 frames; a replay is at most `STREAM_REPLAY_MAX` (1,000) rows.
+
+Frames:
+```
+id: 4182-9912
+event: score
+data: {"occupant_key":"64:4123456","netuid":64,"as_of":"2026-09-23T00:00:00Z","computed_at":"2026-09-23T00:15:09Z","run_kind":"official","composite":82.4,"quality":84.1,"velocity":71.0,"tier":"A","confidence":0.91,"red_flags":[],"spec_version":"ts-1.0"}
+
+id: 4182-9913
+event: event
+data: {"id":9913,"netuid":64,"event_type":"tier_change","severity":"info","event_at":"…Z","payload":{…}}
+
+event: health
+data: {"status":"ok","degraded_reasons":[],"kill_switch_active":false,"scoring_killed":false,"latest_as_of":"…Z"}   (every STREAM_HEALTH_EVERY_SEC, no id)
+
+: ping                                                                    (every STREAM_HEARTBEAT_SEC)
+```
+`id` = `<scores.id>-<events.id>`, the pair of rowid watermarks after that frame. The hub polls both tables by rowid (every `STREAM_POLL_SEC` or on `hub.nudge()`) and streams only committed rows (score frames: `spec_version = SPEC_VERSION`, `shadow = 0`). A reconnect with an id replays the rows above both watermarks straight from SQLite, so it also works across a service restart; more than `STREAM_REPLAY_MAX` rows or an unparsable id → one `event: resync` `data: {"reason":"replay_too_large"}` and the stream continues live (the client refetches). A scoring run of ≈ 130 rows arrives as ≈ 130 `score` frames in one poll. The `health` frame = fields of 01's `/health` plus `latest_as_of` (`queries.feed_meta`).
+
+#### GET `/api/v1/quant/results` and `/api/v1/quant/results/{file}` (open)
+
+Lists `QUANT_RESULTS_DIR` (13's key, default `data/quant/results`, cwd-relative like the old explorer, `backtest_api.py:30`): `{"dir": "data/quant/results", "files": [{"file": "factor_survivorship_20260922_101500.json", "kind": "factor", "run_ts": "2026-09-22T10:15:00Z", "size_bytes": 18211, "summary": {"scope": "survivorship", "timestamp": "…"}}], "errors": ["bad.json: Expecting value"]}`.
+`kind` from 13's file-name prefixes (13 §3): `factor_` → `factor`, `walk_forward_` → `walk_forward`, `survival_` → `survival`, `rank_stability_` → `rank_stability`, `verdict_` → `verdict`; `trials.json` and `*.ic_series.json` sidecars are not listed (still fetchable by name); other names are skipped. `run_ts` from the `_YYYYMMDD_HHMMSS.json` suffix (port `_run_ts`, `backtest_api.py:80-86`). `summary` = the file's top-level keys among `scope, timestamp, factor, gate_pass, pending` when present, else `{}` (13 writes no `summary` object). `/{file}` returns the raw JSON; `file` must match `^[A-Za-z0-9_.-]+\.json$` and resolve inside the dir (`Path.resolve().is_relative_to`), else 404. Max 5 MB per file (413 otherwise).
+
+#### POST `/api/v1/manual/*` (authed, router-level)
+
+| path | body (pydantic) | calls | success |
+|---|---|---|---|
+| `/manual/team` | `{netuid:int, name:str(1..120), role:str(1..60)\|null, profile_url:HttpUrl\|null, evidence_url:HttpUrl\|null, verified:bool=false, note:str\|null}` | `team.add_member(db, netuid=…, name, role, profile_url, evidence_url, evidence_note=note, source='manual', created_by='api', verify=verified)` | 201 |
+| `/manual/team/{id}/verify` | `{evidence_urls:[HttpUrl] (1..5), note:str\|null}` | `team.verify_member(db, id, evidence_urls=…, note=…, by='api')` | 200 |
+| `/manual/team/{id}/reject` | `{reason:str(1..300), evidence_url:HttpUrl\|null}` | `team.reject_member(db, id, reason=…, evidence_url=…, by='api')` | 200 |
+| `/manual/team/disclosure` | `{netuid:int, status:"anonymous"\|"clear", evidence_url:HttpUrl, note:str\|null}` | `team.set_disclosure(db, netuid=…, status=…, evidence_url=…, note=…, by='api')` | 201 |
+| `/manual/product` | `{netuid:int, status:"none"\|"waitlist"\|"beta"\|"live"\|null, evidence_url:HttpUrl, note:str\|null}` | `manual_service.set_product` → `manual_notes(kind='product_status', value=status, evidence_url, body=note)`; `null` clears (→ None, 03) | 201 |
+| `/manual/note` | `{netuid:int, text:str(1..2000), evidence_url:HttpUrl}` | `manual_service.add_note` → `manual_notes(kind='note', body=text, evidence_url)` | 201 |
+| `/manual/flag` | `{netuid:int, flag:"owner_extraction"\|"key_compromise"\|"owner_control_change", action:"confirm"\|"clear", evidence_url:HttpUrl, note:str\|null}` | `manual_service.set_flag` → `manual_flags(state='confirmed'\|'cleared')`, rules below | 201 |
+| `/manual/owner/whitelist` | `{netuid:int, reason:<03 whitelist reason>, applies_to:<03 applies_to>, window_start:ISO, window_end:ISO, evidence_url:HttpUrl, change_id:int\|null, old_coldkey:str\|null, new_coldkey:str\|null, note:str\|null}` | `owner_admin.add_whitelist(db, …, window_start=parse_ts(…), window_end=parse_ts(…), by='api')` | 201 |
+| `/manual/owner/whitelist/{id}/retire` | `{}` | `owner_admin.retire_whitelist(db, id, by='api')` (sets `retired_at`, never deletes) | 200 |
+| `/manual/owner/compromise` | `{netuid:int, window_start:ISO, window_end:ISO, evidence_url:HttpUrl, note:str\|null}` | `owner_admin.override_key_compromise(db, netuid=…, window_start=…, window_end=…, evidence_url=…, by='api', note=…)` | 201 |
+
+**`/manual/flag` rules (02 §D5).** `confirm` only for `owner_extraction` and `key_compromise` (422 `flag_not_human_confirmable`). `clear` for `owner_extraction`, `key_compromise` and `owner_control_change` only while the flag is **active**: `red_flag_state.active = 1` for `(occupant_key, flag, SPEC_VERSION)` (auto-raised, sticky or held), or the latest `manual_flags` row of `(occupant_key, flag)` is `confirmed` (not yet applied by a scoring run); otherwise `409 flag_not_active`. A clear makes 12 set `suppress_until = cleared_at + 30 d`; new trigger ids re-raise immediately (02 §D5). A sticky `owner_control_change` (identity churn) leaves only through such a clear or 11's whitelist. A human-confirmed `owner_extraction_evidence` label (10) is entered as `flag='owner_extraction'`. For `key_compromise` the UI and Telegram prefer `/manual/owner/compromise`, which also whitelists the window (11 §2.10).
+
+**Responses and error mapping.** Success: `{"ok": true, "id": 42, "occupant_key": "64:4123456", "status": "candidate", "warning": null, "event_id": 9931}` (11's `ActionResult` fields; this spec's own writes fill `id`, `occupant_key`, `event_id`). `ActionResult.error` → HTTP (`app/api/errors.py::from_action_result`):
+
+| `ActionResult.error` | HTTP | body `error` |
+|---|---|---|
+| `no_current_occupant`, `not_found` | 404 | same |
+| `evidence_required`, `invalid_url`, `invalid_kind`, `window_too_long` | 422 | same |
+| `two_source_rule` | 409 | `needs_second_source` (02 §H3; `detail` lists the independent domains found — add a second independent source, e.g. the official team page, and retry) |
+| `duplicate_member` | 409 | `duplicate_member` (`id` = the existing row) |
+| `invalid_transition` | 409 | `invalid_transition` |
+
+`add_member(verify=true)` that fails the two-source rule creates a **candidate** and returns 201 with `warning: "two_source_rule"` (11 §2.2.1). Verification needs ≥ 2 independent sources (`evidence_count ≥ 2`, 03's CHECK) on `profile_url` ∪ evidence. `evidence_url` is mandatory for product, note, flag, disclosure, whitelist and compromise (master §8: evidence-linked manual data). This spec's own writes emit `manual_entry` and call `hub.nudge()`; no route triggers a rescore (the next scheduled run picks rows up).
+
+#### GET `/api/v1/review` (open), POST `/api/v1/review/{id}/resolve` (authed)
+
+GET params `kind` (03's `review_queue.kind`), `netuid`, `limit` (1–200, default 100) → `review.list_open(db, kind=…, occupant_key=…, limit=…)`:
+`{"count": 1, "items": [{"id": 17, "occupant_key": "113:5210000", "netuid": 113, "kind": "owner_extraction_candidate", "priority": 1, "summary": "…", "evidence_url": "…", "suggested_flag": "owner_extraction", "created_at": "…Z", "status": "open"}]}`.
+POST body `{action: "confirm_flag"|"whitelist"|"key_compromise"|"dismiss"|"done", note: str|null, evidence_url: HttpUrl|null, whitelist_reason: str|null, window_start: ISO|null, window_end: ISO|null}` → `review.resolve_review(db, id, action, by='api', note=…, evidence_url=…, whitelist_reason=…, window=(parse_ts(start), parse_ts(end)) if both else None)`; response and errors as for `/manual/*` (`evidence_required` when `confirm_flag`/`whitelist`/`key_compromise` lack `evidence_url`).
+
+#### POST `/api/v1/control/pause/{target}`, `/api/v1/control/resume/{target}` (authed)
+
+`target` = an exact job/task id of 01's `JOB_TABLE` or a group name of 16's `PAUSE_GROUPS` (e.g. `discord`, `x`, `llm`) — **never prefix matching** (02 §B12); anything else → 404 `unknown_target`. `alert_dispatch` and `telegram_bot` → 409 `not_pausable` (use `ALERTS_ENABLED` / `TELEGRAM_COMMANDS_ENABLED` + `reload-config`); a group target never pauses an `ops_exempt` job (02 §B12; 16 resolves the members). Body optional `{reason: str (≤ 200), expires_at: ISO|null}`. Calls 16's `app.control.pause(target, by="api", reason=…)` / `resume(target, by="api")`, which write/delete the `control_state` row (the only persistent pause store) and update the in-process cache; emits `collector_paused`/`collector_resumed`.
+```json
+{"ok": true, "target": "x", "paused": true, "changed": true, "by": "api", "reason": "drill",
+ "members": ["x_team_poll", "x_kol_poll", "x_mentions_poll", "x_profile_refresh", "x_ctf_crosscheck"],
+ "file_pause_active": null, "at": "2026-09-23T10:00:00Z"}
+```
+Idempotent (`changed: false` when already in that state). `resume` deletes only the row: if `data/control/<target>.paused` exists (operator-shell emergency input; the app never writes it), the reply keeps `paused: true`, sets `file_pause_active` to that path and `detail` = "stays paused until the operator deletes the file" (02 §B12). Pause reasons shown anywhere use 02 §B12's vocabulary `operator | kill_switch | pause_all | budget | emergency_file`.
+
+#### POST `/api/v1/control/run/{job_id}`, `/api/v1/control/reload-config`, GET `/api/v1/jobs`
+
+Semantics 01 §2.9: `run` sets `next_run_time = now` (404 `unknown_job`, 409 `run_in_flight`) and is the only way to start `manual` jobs such as 17's backfills (02 §E1); `reload-config` → `{changed: [non-secret keys], restart_required: bool}`; `/api/v1/jobs` = `/health`'s `collectors` + `tasks` blocks plus the `JobSpec` fields.
+
+#### POST `/api/v1/control/rescore` (authed)
+
+Body `{as_of: "YYYY-MM-DD"|null, spec: str|null, shadow: bool=false}`. Calls `ctx.rescore(as_of, spec or SCORING_SPEC_VERSION, shadow)` = 12's `ScoringService.rescore` (12 §2.13 rule 5: background task, `run_id = "rs-YYYYMMDD-HHMMSS"`; `as_of=None` → current slot; a date → that day's official slot, reconstructed). `shadow=true` requires `spec ≠ SPEC_VERSION` (422 `shadow_requires_other_spec`). Refusals: run in flight → 409 `rescore_running`; slot already scored for that spec → 409 `slot_already_scored`; slot older than the spec's latest completed slot → 409 `slot_regresses`; `./SCORING_KILLED` → 423 `scoring_killed`. Response `202 {"accepted": true, "run_id": "rs-20260922-124003", "spec_version": "ts-1.1", "shadow": true}`; emits `rescore_requested`.
+
+#### 04's registry routes and 16's budget override
+
+04 ships **no** HTTP routes (04 §8.1: "14 owns routes … and calls the §3.3 domain functions"), so this spec's `app/api/registry.py` implements them over 04's public API; its read router joins `read_mods`, its write router joins `write_mods` (auth + origin guard). 04's `ValueError` → 422 `invalid_override` with the message as `detail`; unknown `netuid`/occupant/id → 404. Before Phase 11 the operator uses 04's CLI (`python -m app.registry review [--json]`).
+- `GET /api/v1/registry/occupants?include_pre_launch=0` → `active_occupants(db, include_pre_launch)`; `GET /api/v1/registry/{netuid}` → `current_occupant` + `resolved()` for every 04 `RESOLVED_FIELDS` entry (`{value, source, status, override_id}`) + the netuid's active `manual_overrides`.
+- `GET /api/v1/registry/needs-review?reason=&limit=200` → `compute_needs_review(db, now=int(time.time()))` in 04's priority order, filtered by `reason`; items are 04's `ReviewItem` with `since` rendered ISO.
+- `GET /api/v1/registry/overrides?netuid=&field=&status=&source=&limit=200` (newest first) and `GET /api/v1/registry/overrides/{id}` → `manual_overrides` rows (times ISO).
+- `POST /api/v1/registry/overrides` (and its alias `POST /api/v1/manual/override`) body `{netuid:int|null, occupant_key:str|null (one required; netuid → current occupant), field:str (04 RESOLVED_FIELDS), mode:"fallback"|"force"|"suppress", value:str|null, suppress_source:str|null, suppress_value:str|null, reason:str|null, evidence_url:HttpUrl|null, resolves_event_id:int|null}` → `add_override(db, …, created_by=by)` (`by` = `api`); force/suppress without `reason` + `evidence_url` → 422 (04 validates); unique-index clash → 409 `override_exists`; 201 `{id}`. Passing `resolves_event_id` closes that `source_disagreement_open` item.
+- `POST /api/v1/registry/overrides/{id}/status` body `{status:"active"|"rejected"|"retired"}` → `set_override_status(db, id, status, by='api')`; 200 `{id, status}`. This is the only update: rows are never edited or deleted (03 "status transitions only"), so there is no PUT/PATCH/DELETE (CORS is GET/POST, §3.6).
+- `POST /api/v1/registry/refresh` body `{jobs: ["registry_occupants","registry_identity"]}` (default both) → 01's run-now for each id (same code path as `/control/run/{job_id}`); 202 `{started:[…], in_flight:[…], paused:[…]}` (a paused job is reported, not forced).
+- `POST /api/v1/registry/reoccupied/{event_id}/ack` body `{note:str(1..2000), evidence_url:HttpUrl|null}` → the event must be a `netuid_reoccupied` row (404 `unknown_event`, 422 `not_reoccupied_event`); inserts `manual_notes(kind='note', occupant_key=payload.new_occupant_key, body=note, evidence_url, ref_event_id=event_id, created_by='api')` (clears 04 §2.10 reason 2); 201; emits `manual_entry` (`kind: "note"`). `POST /api/v1/control/budget/override` (authed, `{group, extra_usd, reason}`): semantics 16 §2.10.
+
+### 3.6 CORS, auth, headers summary
+
+- `CORSMiddleware(allow_origins=CONTROL_ALLOWED_ORIGINS.split(","), allow_methods=["GET","POST"], allow_headers=["Content-Type","X-Auth-Token","Last-Event-ID"])`, no credentials (port `main.py:2171-2179`; `CONTROL_ALLOWED_ORIGINS` is 01's key). Behind `tailscale serve` add the tailnet UI origin (e.g. `https://<host>.<tailnet>.ts.net`, 16 §2.14). Whether browsers preflight `Last-Event-ID` on a cross-origin EventSource reconnect is **UNVERIFIED**; allowing the header and accepting `?last_event_id=` covers both cases.
+- `require_auth` = 01's verbatim copy `app/api_auth.py` (old `api_auth.py:1-36`: reads `app.config.settings.API_AUTH_TOKEN` live, `hmac.compare_digest` on UTF-8 bytes, empty token = auth off), applied router-wide to every POST router. Startup warns when the token is empty and `HEALTH_HOST` is not loopback (old `main.py:3258-3265`); 16's self-check also flags `tailscale serve` exposure without a token (checklist A8).
+- **Origin guard** (`app/api/errors.py::origin_guard`, a dependency on every authed router): a request carrying an `Origin` header that is not in `CONTROL_ALLOWED_ORIGINS` → `403 origin_not_allowed`. CORS hides responses but does not stop a cross-site "simple" POST; with `API_AUTH_TOKEN` empty such a POST would otherwise reach body-less routes like `/control/pause/{target}`. curl, the CLI and the bot send no `Origin` and are unaffected.
+- Reads are open by design (single operator, loopback/tailnet); no secret is ever served (no tokens, no `.env` values, `/health` masks per 01).
+- `docs_url=None, redoc_url=None`.
+- Every response carries `X-TaoSentinel-Spec: <SPEC_VERSION>` for debugging mixed feeds.
+
+---
+
+## 4. Failure modes → response semantics (adapted absence-vs-failure table)
+
+| condition | `/scores/latest` | `/subnets/{n}` | Telegram | rationale |
+|---|---|---|---|---|
+| occupant never scored | omitted (`count` excludes it) | `score: null` | `/sn`: "no score yet (next official run 00:15Z)" | absence of a run is not a 0 score |
+| pillar `P_k` coverage < 0.3 | `pillars.Pk: null` | bar rendered `░░░░░░░░░░ n/a` | same | master §7.1: uncovered pillar is dropped, not zero |
+| `quality`/`velocity`/`composite` null | row present with nulls, `tier: null` (15: neutral, 02 §H1) | shown as `—` | `—` | never coerce to 0 |
+| `confidence < 0.4` | dropped unless `include_insufficient=1` | shown with `insufficient_data` badge | `/top` hides, `/sn` shows badge | master §7.7, 02 §H1 |
+| `scores.status = pre_launch` | dropped unless `include_prelaunch=1`; `composite: null` | pillars P2–P5 shown | `/sn` shows "pre-launch" | master §7.1 |
+| evidence `raw_status = 'absent'` | — | value `m` + badge "verifiable absence" (+ `reason`) | `m` + `abs` | absence is a signal (02 §H2) |
+| evidence `raw_status ∈ {failed, none}` | — | `m: null`, "collection failure" (+ `reason`) | `n/a` | failure is not (02 §B3: `none` reads as `failed`) |
+| evidence `raw_status = 'not_applicable'` | — | "n/a (not applicable)" | `n/a` | e.g. pre-launch P1 |
+| `./SCORING_KILLED` | last good, `stale: true` | banner "scoring paused" | `/health` shows `SCORING_KILLED yes` | master §11 |
+| `as_of` older than `ttl_seconds` | `stale: true` | banner | — | consumer treats as neutral (15) |
+| unknown `spec` / no rows | `200`, `count: 0`, `stale: true` | 404 `unknown_netuid` only if no occupant | "no scores for <spec>" | never a silent switch to another spec |
+| DB unavailable | `503 db_unavailable` | 503 | "DB unavailable, try later" | never raise |
+| `explain` JSON unparsable | — | `explain: null`, `red_flags: []`, log warning | drivers omitted | never 500 on bad JSON |
+| manual clear of an inactive flag | — | 409 `flag_not_active` | `❌ flag_not_active` | 02 §D5 |
+| team verify with one independent source | — | 409 `needs_second_source` | `❌ needs a second independent source` | 02 §H3 |
+| unknown pause target | — | 404 `unknown_target` | usage + valid targets | 02 §B12 (no prefix matching) |
+| resume while an emergency file exists | — | 200, `paused: true`, `file_pause_active` | "stays paused until you delete …" | 02 §B12 |
+| unknown `event_type` in `events` | — | listed by `/events` | digest only | 02 §D3 |
+| SSE subscriber slow (queue full) | — | — | — | drop oldest, send `resync` |
+| Telegram API 429 / 5xx / network | — | — | limiter honours `Retry-After`; alert keeps `alerted_at NULL` | exactly-once eventually (§2.4) |
+
+---
+
+## 5. Configuration
+
+All keys live in `app/config.py` `Settings(BaseSettings)` (spec 01 conventions: UPPER_SNAKE, `.env`, `extra="ignore"`). Consumers read `app.config.settings` dynamically, never a captured reference. Keys owned by this spec (02 §F1: 01's inventory lists them unchanged):
+
+| key | type | default | validator / notes |
+|---|---|---|---|
+| `UI_BASE_URL` | str | `"http://127.0.0.1:3001"` | deep links in alerts and replies; set to the tailnet URL when the UI is served remotely |
+| `SCORE_FEED_TTL_SEC` | int | `25200` | 21600–86400; advertised `ttl_seconds` and the `stale` threshold: the 6-h cadence plus run latency (a 12:15Z run publishes slot 12:00Z; the next slot lands ≈ 18:15Z, 6 h 15 min later) |
+| `STREAM_ENABLED` | bool | `True` | `/api/v1/stream` returns 404 when false |
+| `STREAM_MAX_CONNECTIONS` | int | `8` | 1–64 |
+| `STREAM_HEARTBEAT_SEC` | int | `15` | 5–60 |
+| `STREAM_POLL_SEC` | float | `5.0` | 1–60; hub poll interval when not nudged |
+| `STREAM_REPLAY_MAX` | int | `1000` | 100–10000; rows replayed for a `Last-Event-ID`, beyond → `resync` |
+| `STREAM_HEALTH_EVERY_SEC` | int | `60` | 10–600 |
+| `EXPORT_CACHE_MAX_AGE_SEC` | int | `300` | `Cache-Control` on exports |
+| `HEALTH_PROBE_TIMEOUT_SEC` | float | `10.0` | per active probe |
+| `HEALTH_SERVICES_CACHE_SEC` | int | `60` | probe cache |
+| `TELEGRAM_ENABLED` | bool | `True` | switch for the dispatcher's sends and the bot; while false, 16's `AlertLatch.fire()` treats the dispatcher as inactive and sends ops alerts direct (16 §2.13.2 rule c) — to silence everything, unset `TELEGRAM_BOT_TOKEN` |
+| `TELEGRAM_POLL_TIMEOUT_SEC` | int | `20` | long-poll `getUpdates` |
+| `TELEGRAM_MAX_MSG_PER_MIN` | int | `20` | 1–60; rate of 01's `telegram` limiter key (01 builds the bucket from it, burst 5) |
+| `TELEGRAM_CONFIRM_TTL_SEC` | int | `300` | lifetime of two-step confirmation nonces |
+| `ALERTS_ENABLED` | bool | `True` | enabled flag of `alert_dispatch` (01 implements); false → rows keep `alerted_at` NULL |
+| `ALERT_DISPATCH_INTERVAL_SEC` | int | `60` | 15–600 (`IntervalTrigger(seconds=…)`) |
+| `ALERT_MIN_SEVERITY` | str | `"info"` | `info\|warning\|critical`; lower immediate rows → digest (§2.4 rule 4) |
+| `ALERT_LATE_AFTER_HOURS` | int | `24` | 1–168; older immediate rows → `digest_late` |
+| `ALERT_BATCH_THRESHOLD` | int | `5` | immediate rows per tick above which they are sent batched |
+| `ALERT_MAX_ROWS_PER_TICK` | int | `200` | 10–1000 |
+| `WATCHLIST_NETUIDS` | list[int] | `[]` | comma-separated in `.env`; validator parses `"31,47,113"` |
+| `DEREG_WATCH_ENABLED` | bool | `True` | |
+| `DEREG_WATCH_INTERVAL_MIN` | int | `60` | 5–1440 |
+| `DEREG_WATCH_SAFETY_MAX` | float | `0.10` | `dereg_safety` threshold |
+| `DEREG_WATCH_IMMUNITY_WARN_DAYS` | int | `7` | |
+| `NEEDS_REVIEW_DIGEST_ENABLED` | bool | `True` | |
+| `NEEDS_REVIEW_DIGEST_DAY` | str | `"mon"` | APScheduler `day_of_week` |
+| `NEEDS_REVIEW_DIGEST_HOUR_UTC` | int | `8` | 0–23 |
+| `BLOCKED_SITE_DAYS` | int | `7` | digest bucket `blocked_sites` (§8.3) |
+| `FRONTEND_PORT` | int | `3001` | informational; 16's unit passes `-p 3001` |
+
+Consumed, owners in parentheses (not redefined here): `HEALTH_HOST` (01, loopback default), `HEALTH_PORT` (01, 8090), `API_AUTH_TOKEN`, `CONTROL_ALLOWED_ORIGINS` (01; this spec asks its validator to reject `*`), `SPEC_VERSION` (01; `SCORING_SPEC_VERSION` is its read-only alias, 02 §F2), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_COMMANDS_ENABLED`, `JOB_FAIL_ALERT_THRESHOLD`, `NETWORK_IMMUNITY_PERIOD_BLOCKS` (01); `KILL_SWITCH_PATH`, `SCORING_KILL_SWITCH_PATH`, `PAUSE_ALL_PATH`, `CONTROL_DIR`, `DB_BACKUP_DIR`, `DB_BACKUP_MIRROR_DIR`, `DB_BACKUP_STALE_HOURS`, `DISK_FREE_MIN_GB` (01/16); `QUANT_RESULTS_DIR` (13); `GITHUB_TOKEN`, `DISCORD_ENABLED`, `X_PROVIDER`, `ANTHROPIC_API_KEY`, `LLM_ENABLED` (06/08/09/10; probes). Retired from this spec: `API_HOST`/`API_PORT` (= 01's `HEALTH_HOST`/`HEALTH_PORT`), `STREAM_REPLAY_BUFFER`, `ALERT_DEDUPE_DEFAULT_MIN` (dedupe is 03's `dedupe_key`).
+
+**Pause / kill semantics (02 §B12, 16 §2.11).** Operator pauses are `control_state` rows written by 16's `app/control.py` (API, Telegram, CLI); targets are exact job ids or `PAUSE_GROUPS` names, never prefixes; `resume` deletes only the row, and an emergency `data/control/<target>.paused` file (operator shell only; the app never writes it) keeps the target paused — the reply says so. `./KILL_SWITCH` pauses paid jobs and the LLM (free LongTasks keep running); `./PAUSE_ALL` pauses every non-`ops_exempt` job — `alert_dispatch` and `telegram_bot` are `ops_exempt` (02 §E1), so alerts and `/resume` keep working; `./SCORING_KILLED` stops new score rows (12), makes the feed `stale: true` and `/control/rescore` answer 423. Pause reasons shown: `operator | kill_switch | pause_all | budget | emergency_file`. `ALERTS_ENABLED=false` stops the dispatcher; rows keep `alerted_at` NULL and are routed when it is re-enabled (late ones to the digest, §2.4 rule 4).
+
+---
+
+## 6. Cadence, rate limits, cost
+
+### 6.1 Jobs and LongTasks (01's `JOB_TABLE` mirrors these rows verbatim, 02 §E2)
+
+| id | factory (`app.…`) | trigger | UTC time / interval | misfire grace s | timeout s | `ops_exempt` | enabled flag | phase | paid | `min_gap_factor` | liveness (16 §2.5) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `alert_dispatch` | `alerts.dispatch:AlertDispatchJob` — **implemented by 01** (02 §D3), routing = §2.4 | interval `seconds=ALERT_DISPATCH_INTERVAL_SEC` | every 60 s | 120 | 50 | **yes** (02 §E1) | `ALERTS_ENABLED` | 0 | no | 0 | formula: 1·60·2 + 50 + 120 = 290 s |
+| `telegram_bot` | `notifications.bot:TelegramBotTask` (`LongTask`) | LongTask | long-poll `getUpdates`, `TELEGRAM_POLL_TIMEOUT_SEC` (20 s) | — | — | **yes** (02 §E1) | `TELEGRAM_COMMANDS_ENABLED` | 11 | no | — | not gated (no declared max-age; 16 §2.5) |
+| `dereg_watch` | `notifications.watch:DeregWatchJob` | interval `minutes=DEREG_WATCH_INTERVAL_MIN` | every 60 min | 600 | 120 | no | `DEREG_WATCH_ENABLED` | 11 | no | 0 | 7,440 s |
+| `needs_review_digest` | `notifications.digest:NeedsReviewDigestJob` | cron `day_of_week=NEEDS_REVIEW_DIGEST_DAY hour=NEEDS_REVIEW_DIGEST_HOUR_UTC minute=0` | Mon 08:00Z | 3600 | 300 | no | `NEEDS_REVIEW_DIGEST_ENABLED` | 11 | no | 0 | weekly: 1,210,020 s (never trips) |
+
+None of them has a spend `provider` (Telegram calls go through `Http` provider `telegram`, which has no cap). `alert_dispatch` and `telegram_bot` cannot be paused through a group target (02 §B12) and the control routes refuse them by id (§3.5).
+
+### 6.2 Provider use
+
+| consumer | provider (01 limiter) | rate | budget math |
+|---|---|---|---|
+| active probes `telegram`, `github`, `subtensor_rpc`, `anthropic` | `telegram_bot`, `github`, `subtensor_rpc`, `anthropic` | 1 request each per `HEALTH_SERVICES_CACHE_SEC` at most, only when someone opens the services page | ≤ 60/h per provider worst case, typically a few per day; `/rate_limit` and `/v1/models` cost no quota/tokens |
+| passive probes `tmc`, `tmc_sse`, `discord`, `x` | none | — | 0 (limiter snapshot, `/health`, `collector_runs`); nothing is added to 05's TMC budget table (02 §G3) |
+| Telegram (alerts, replies, digest, long-poll) | `telegram_bot` | `TELEGRAM_MAX_MSG_PER_MIN` 20, burst 5 | typical day ≈ 10 alerts + ≈ 20 replies; weekly digest 1–3 messages; ≈ 4,300 long-poll calls/day (free) |
+| SSE hub poll | none (SQLite) | every 5 s: 2 indexed `id > ?` queries | negligible |
+| `/api/v1/subnets` | none | 3 queries (registry join, latest scores, 7-d window) | < 20 ms on ≈ 130 rows |
+| frontend SWR | none | Matrix `refreshInterval: 60000` + SSE-triggered `mutate`; Subnet page 30 s; Events 30 s; NavBar `/health` 30 s | loopback |
+
+This spec never builds its own client or bucket: every outbound call is `Http.request(provider, …)` on 01's `ProviderLimiter` (02 §G1). Monthly cost of this component: **$0**.
+
+---
+
+## 7. Failure modes and fail-safe behaviour
+
+- **No handler raises.** Routers wrap DB work in `try/except Exception` → structured error JSON + `logger.error(..., data={"route", "error"})`. uvicorn's default 500 handler is overridden to return `{"error": "internal"}` without a traceback.
+- **Telegram bot task** (`TelegramBotTask.run_once` → ported `TelegramBot.run`, `telegram.py:142-168`): polling exceptions are logged and retried after `retry_delay_sec`; a handler exception is caught in `_dispatch_command` and answered with `"⚠️ command failed: <exc class>"` — the bot never dies on a bad command. Unauthorised chats are ignored (`telegram.py:271-274`, extended to `TELEGRAM_ALLOWED_CHAT_IDS`). Pending updates are discarded on start (`telegram.py:229-234`). `beat()` on every poll attempt; not liveness-gated (16 §2.5), so a Telegram outage never restarts the service.
+- **Alert delivery**: `alert_dispatch` runs under 01's job wrapper; send failures and poisoned rows follow §2.4's delivery rules; the dispatcher is `ops_exempt`, so `PAUSE_ALL` never silences it. While it is disabled or stale, 16's `AlertLatch.fire()` sends ops alerts direct and presets `alerted_at` (16 §2.13.2 rule c).
+- **SSE**: per-subscriber `asyncio.Queue(maxsize=256)`; on `QueueFull` the hub drops the oldest frame and enqueues a `resync`. The handler waits on the queue with `asyncio.wait_for(…, STREAM_HEARTBEAT_SEC)` so `request.is_disconnected()` (ported `main.py:3183`) is checked at least every heartbeat. A subscriber registers as the generator's first step and deregisters in its `finally` (old `main.py:3180-3210` counter pattern); the cap is checked against the registered set, so a burst of simultaneous handshakes can overshoot it by at most the burst (harmless on loopback).
+- **Last-good semantics**: feed and `/subnets` never fall back to a different `spec_version`; a spec without rows yields an empty response with `stale: true`.
+- **Alert thresholds** (other specs, surfaced here): `collector_failing` after `JOB_FAIL_ALERT_THRESHOLD` (5) consecutive failures (01); spend 80 %/100 % (16); backup older than `DB_BACKUP_STALE_HOURS` (36 h, 16).
+- **`/health`** is 01's (02 §G6); 16's deploy gate parses `status`/`version` and passes on `ok|degraded`. This spec's consumers never grep the raw body (old `auto-update.sh:161` already matched `"status"` whitespace-tolerantly).
+- **Watchdog**: the API task is covered by 16 §2.5 amendments 3–4 (`task_handles["health"].done()` + `/health` self-probe); nothing further here.
+
+---
+
+## 8. Implementation plan
+
+### 8.1 Files
+
+```
+app/api/__init__.py
+app/api/context.py        ApiContext dataclass (+ from_runtime)
+app/api/app.py            create_app(ctx=None) -> FastAPI      (one factory; 01 ships the Phase-0 subset)
+app/api/errors.py         ApiError(code, status, detail), from_action_result(), origin_guard, exception handlers
+app/api/queries.py        all SELECTs
+app/api/models.py         pydantic response/request models (ISO conversion lives here)
+app/api/health.py         /health (serves 01's builder), /api/health/services, /api/v1/jobs   (01 Phase 0; 14 adds probes)
+app/api/scores.py         /api/v1/scores/latest, /history
+app/api/subnets.py        /api/v1/subnets, /{netuid}
+app/api/events.py         /api/v1/events
+app/api/export.py         /api/v1/matrix.csv, /api/v1/export/scores.json
+app/api/stream.py         /api/v1/stream
+app/api/hub.py            StreamHub
+app/api/quant.py          /api/v1/quant/results[/{file}]
+app/api/manual.py         POST /api/v1/manual/* (team/owner routes delegate to 11)
+app/api/manual_service.py set_product/add_note/set_flag (shared with Telegram)
+app/api/review.py         GET /api/v1/review, POST /api/v1/review/{id}/resolve
+app/api/registry.py       /api/v1/registry/* + /api/v1/manual/override alias over 04 §3.3 (read + write routers, §3.5)
+app/api/control.py        POST /api/v1/control/*   (01 Phase 0: pause/resume/run/reload-config; 14 adds rescore)
+app/alerts/routing.py     ROUTES (§2.4) + route_for()        — content owned here, shipped by 01 in Phase 0 (02 §D3)
+app/alerts/templates.py   render(row, *, name, ui) (§8.5)     — same
+app/notifications/format.py     esc, pre_table, bar, chunk     — same (16's ops digest uses chunk)
+app/notifications/telegram.py   ported transport (01 copies it in Phase 0; 14 changes it per §8.4)
+app/notifications/commands.py   build_handlers(ctx) + formatters
+app/notifications/bot.py        TelegramBotTask(LongTask) wrapping TelegramBot.run
+app/notifications/watch.py      DeregWatchJob
+app/notifications/digest.py     NeedsReviewDigestJob, render_digest()
+frontend/                       (8.6)
+tests/api/…, tests/notifications/…  (§9)
+```
+Not in this spec: `app/api_auth.py` (01's verbatim copy of `E:\SN_Trader\SubnetTrader\app\api_auth.py:1-36`), `app/alerts/dispatch.py` (01), `app/control.py` (16), `app/integrity/{team,owner_admin,review}.py` (11), `app/registry/review.py` + `app/registry/overrides.py` (04's domain functions; 04 ships no router).
+
+### 8.2 Context and factory
+
+```python
+# app/api/context.py
+@dataclass(slots=True)
+class ApiContext:
+    runtime: Callable[[], "Runtime"]                   # 01's get_runtime: db, jobs, tasks, limiter, http, costs, scheduler
+    health: Callable[[], Awaitable[dict]]              # 01's /health builder (02 §G6), served verbatim
+    rescore: Callable[[str | None, str, bool], Awaitable[str]]   # 12 ScoringService.rescore(as_of, spec, shadow) -> run_id
+    rescore_running: Callable[[], bool]
+    hub: "StreamHub"
+    def db(self) -> "Database | None": return self.runtime().db
+    @classmethod
+    def from_runtime(cls, get_runtime: Callable[[], "Runtime"]) -> "ApiContext": ...
+
+# app/api/app.py
+def create_app(ctx: ApiContext | None = None) -> FastAPI:
+    ctx = ctx or ApiContext.from_runtime(get_runtime)          # 01's runtime calls create_app() without arguments
+    app = FastAPI(title="TaoSentinel", docs_url=None, redoc_url=None)
+    app.add_middleware(CORSMiddleware, allow_origins=_origins(), allow_methods=["GET", "POST"],
+                       allow_headers=["Content-Type", "X-Auth-Token", "Last-Event-ID"])
+    read_mods = (health, scores, subnets, events, export, quant, review.read, registry.read)
+    write_mods = (manual, review.write, control, registry.write)
+    for mod in (*read_mods, *write_mods, stream):
+        mod.configure(ctx)
+    for mod in read_mods:
+        app.include_router(mod.router)                                             # open read tier
+    if settings.STREAM_ENABLED:
+        app.include_router(stream.router)                                          # open read tier
+    for mod in write_mods:
+        app.include_router(mod.router, dependencies=[Depends(require_auth), Depends(origin_guard)])   # authed
+    app.add_exception_handler(ApiError, _api_error_handler)
+    app.add_exception_handler(Exception, _internal_handler)
+    app.middleware("http")(_spec_header_middleware)
+    return app
+```
+Port `main.py:2144-2228` shape; drop the `try/except ImportError` wrapper (FastAPI is a hard dependency). 01's `run_health_server` serves it; 04's router is included only once its module imports (Phase ≥ 1).
+
+### 8.3 Queries (signatures)
+
+```python
+async def latest_scores(db, *, spec: str, min_confidence: float = 0.0, tier: str | None = None,
+                        include_prelaunch: bool = False, include_insufficient: bool = False,
+                        netuids: list[int] | None = None) -> list[dict]
+async def feed_meta(db, *, spec: str) -> dict            # {as_of, computed_at, run_kind, regime, max_id} (INTEGER times)
+async def score_history(db, *, occupant_key: str, spec: str, days: int, official_only: bool) -> list[dict]
+async def resolve_occupant(db, ident: str | int) -> tuple[str, int] | None   # (occupant_key, netuid)
+async def subnet_rows(db, *, spec: str, include_prelaunch: bool, include_deregistered: bool) -> list[dict]
+async def spark_7d(db, *, spec: str) -> dict[str, list[float]]
+async def subnet_detail(db, *, occupant_key: str, spec: str, events_limit: int) -> dict
+async def evidence(db, *, occupant_key: str, spec: str, as_of: int) -> list[dict]   # stage='norm' rows of that slot (02 §H2)
+async def site_state(db, *, occupant_key: str) -> dict | None     # newest site_down_7d / site_recovered (+ payload.reason)
+async def events_query(db, *, since: int, until: int | None, severities: set[str] | None,
+                       types: set[str] | None, netuid: int | None, occupant_key: str | None,
+                       limit: int, before_id: int | None) -> list[dict]
+async def active_flags(db, *, spec: str) -> list[dict]   # red_flag_state active=1 ⋈ subnets; multiplier = catalog.RED_FLAGS
+async def flag_is_active(db, *, occupant_key: str, flag: str, spec: str) -> bool   # 02 §D5 test (§3.5)
+async def movers(db, *, spec: str, days: int, n: int) -> tuple[list[dict], list[dict]]
+async def needs_review(db, *, now: int) -> dict[str, list[dict]]            # buckets below
+async def digest_events(db, *, after_id: int, upto_id: int) -> list[dict]  # §2.6 section 2
+async def latest_ticks(db, *, max_age_s: int = 1800) -> dict[int, dict]    # dereg_watch + moving_price_rank
+```
+`needs_review` buckets: first, 04's list — `needs_review` calls `await app.registry.compute_needs_review(db, now)` (04 §2.10/§3.3: `(db, now: int) -> list[ReviewItem]`, items `{occupant_key, netuid, name, reason, detail, since, event_id}`) and merges it as one top-level bucket per 04 reason, key `registry.<reason>` (`registry.new_occupant`, `registry.reoccupied_unreviewed`, `registry.source_disagreement_open`, `registry.abandonment_marker`, `registry.name_turnover`, `registry.identity_void`, `registry.chain_identity_missing`, `registry.legacy_needs_review`, `registry.never_activated`, `registry.unresolved_watch_target`, `registry.leaked_secret`), inserted in 04's priority order before 14's own buckets; empty reasons are omitted and a raising call yields a single `registry.error` bucket (the digest still sends); then `queue` = 11's `review.list_open(db, limit=500)` grouped by kind (includes 10's `llm_flag_candidate`); `team_candidates` = active occupants with `team_members.status='candidate'` rows (count per netuid); `team_unknown` = active occupants whose latest `team_doxxed` norm row has `raw_status ∈ {failed, none}` (11 §2.2.6's None reasons); `product_unset` = active occupants with no `manual_notes(kind='product_status')` row, or whose latest one has `value` NULL (07's manual product override is missing, so `product_status` scores None); `blocked_sites` = active occupants whose primary website (`web_checks.kind='website', is_primary=1`) has a row on each of the last `BLOCKED_SITE_DAYS` (7) check days and every one of them is `status_class='bot_challenge'` (07: 403/503 challenge or 429) or `robots_allowed = 0` — the collector can never see the site, so the operator should set a manual product status or docs override (07 §7).
+
+### 8.4 Telegram port
+
+Copy `E:\SN_Trader\SubnetTrader\app\notifications\telegram.py` (01 does this in Phase 0) and change only:
+- lines 27-45 `TelegramCommandHandlers` → new fields (below);
+- lines 52-87 keyboards → `main_menu_keyboard()`, `top_keyboard(rows)`, `confirm_keyboard(action, arg)`, `back_keyboard()`;
+- lines 296-338 `_dispatch_callback` and 398-486 `_dispatch_command` → table-driven dispatch (below); the old screen helpers 349-397 (`_is_paused` … `_render_close_confirm`) are dropped;
+- lines 488-514 `_set_my_commands` → new command list;
+- lines 271-274 (`_handle_update` chat check) → accept any id in `TELEGRAM_ALLOWED_CHAT_IDS` (empty → `TELEGRAM_CHAT_ID`, 01);
+- lines 97-111 `send_alert` and 516-545 `_post`/`_url` → same logic, but the request goes through `rt.http.request("telegram", …)` (02 §G1; `getUpdates` with `timeout=TELEGRAM_POLL_TIMEOUT_SEC + 10, retries=0`); `send_alert` accepts `reply_markup`.
+Keep verbatim: `run` (142-168), `send_message`/`edit_message`/`answer_callback`/`send_document` (170-227), `_discard_pending_updates`/`_fetch_updates` (229-259), `_handle_callback` (281-294), `_emit` (340-347), `_toast` (90-94), `_redact` (138-140). `TelegramBotTask.run_once(stop)` awaits `bot.run(stop)` and calls `beat()` after every poll attempt.
+
+```python
+@dataclass(slots=True)
+class TelegramCommandHandlers:
+    help_text: str
+    top: Callable[[int, str | None], Awaitable[str]]
+    sn: Callable[[int], Awaitable[tuple[str, dict | None]]]       # (html, keyboard)
+    events: Callable[[int], Awaitable[str]]                       # last 10 events of a netuid (callback ev:<n>)
+    flags: Callable[[], Awaitable[str]]
+    movers: Callable[[int], Awaitable[str]]
+    health: Callable[[], Awaitable[str]]
+    spend: Callable[[], Awaitable[str]]
+    team: Callable[[list[str]], Awaitable[str]]                   # add | verify | reject | list | disclosure → 11 team.*
+    product_set: Callable[[int, str, str], Awaitable[str]]
+    flag: Callable[[str, int, str, str], Awaitable[str]]          # action, netuid, flag, url (after confirmation)
+    owner: Callable[[list[str]], Awaitable[str]]                  # whitelist | compromise (after confirmation) → 11
+    review: Callable[[list[str]], Awaitable[str]]                 # [kind] | resolve <id> <action> … → 11 review.*
+    pause: Callable[[str], Awaitable[str]]
+    resume: Callable[[str], Awaitable[str]]
+    needsreview: Callable[[], Awaitable[str]]
+    digest: Callable[[], Awaitable[str]]
+    targets: Callable[[], Awaitable[list[str]]]                   # job ids + PAUSE_GROUPS names (validation, keyboard)
+```
+
+Dispatch table (`_dispatch_command`, `shlex.split` kept so quoted names work; every reply ≤ 4,096 characters via `chunk`):
+
+| command | args | handler | reply |
+|---|---|---|---|
+| `/start`, `/help` | — | `help_text` | command list |
+| `/top` | `[n=10] [tier]` | `top(n, tier)`; n clamped 1–50 | table + `top_keyboard` |
+| `/sn`, `/subnet` | `<netuid>` | `sn(netuid)` | card + keyboard `[Refresh] [Events] [Back]` |
+| `/flags` | — | `flags()` | table |
+| `/movers` | `[days=7]` (1–90) | `movers(days)` | two tables |
+| `/health`, `/status` | — | `health()` | table + `main_menu_keyboard` |
+| `/spend` | — | `spend()` | table |
+| `/team` | `add <netuid> "<name>" "<role>" <profile_url>` · `verify <id> <url> [<url2>]` · `reject <id> "<reason>"` · `list <netuid>` · `disclosure <netuid> anonymous\|clear <url>` | `team(args)` → 11's `add_member` (candidate, `source='manual'`) / `verify_member` / `reject_member` / `list_members` / `set_disclosure`, all `by='telegram'` (02 §H3) | confirmation line / list (≤ 30 rows) |
+| `/product` | `set <netuid> <none\|waitlist\|beta\|live> <url>` | `product_set` | confirmation |
+| `/flag` | `confirm\|clear <netuid> <flag> <url>` | two-step (nonce) → `flag` (02 §D5 rules) | confirmation |
+| `/owner` | `whitelist <review_id> <reason> <url>` · `compromise <netuid> <from_iso> <to_iso> <url>` | two-step → `review.resolve_review(…, 'whitelist', whitelist_reason=reason, evidence_url=url)` / `owner_admin.override_key_compromise(…)` | confirmation |
+| `/review` | `[kind]` · `resolve <id> confirm_flag\|dismiss\|done [<url>] ["<note>"]` | `review.list_open` / `review.resolve_review` (two-step for `confirm_flag`) | list (≤ 20 rows) / confirmation |
+| `/pause`, `/resume` | `<target>` (job id or `PAUSE_GROUPS` name) | two-step: `confirm_keyboard("pause", target)`; `do:pause:<target>` → 16's `app.control.pause(target, by='telegram')` | toast (+ emergency-file note on resume) |
+| `/needsreview` | — | `needsreview()` | digest section 1 |
+| `/digest` | — | `digest()` | digest sections 2–3 (watermark unchanged) |
+| unknown | | | `Unknown command. /help` |
+
+Callback data (≤ 64 bytes): `act:top`, `act:flags`, `act:movers`, `act:health`, `act:spend`, `act:review`, `sn:<netuid>`, `ev:<netuid>`, `ask:pause:<t>`, `do:pause:<t>`, `ask:resume:<t>`, `do:resume:<t>`, `do:x:<nonce>` / `no:x:<nonce>` (confirm/cancel a parsed `/flag`, `/owner` or `/review resolve … confirm_flag`; the 8-character nonce maps to the parsed action in memory for `TELEGRAM_CONFIRM_TTL_SEC`, single use; a restart drops pending nonces and the operator re-issues the command). `answer_callback` is always called first (ported comment `telegram.py:300-303`).
+
+### 8.5 Reply formats (exact)
+
+`/top 10`:
+```
+<b>TaoSentinel · top 10 · ts-1.0 · as_of 2026-09-22 12:00Z (provisional)</b>
+<pre>
+ #  SN  name          T  comp  hlth  vel   conf fl
+ 1  64  Chutes        A  82.4  84.1  71.0  .91  -
+ 2  51  Celium        A  79.8  81.0  68.2  .88  -
+ 3   4  Targon        B  71.3  73.9  55.0  .85  1
+…
+</pre>
+tier filter: none · hidden: 11 insufficient_data · <a href="http://127.0.0.1:3001/matrix">matrix</a>
+```
+Widths: `#`2, `SN`3, `name`12 (cut with `…`), `T`1, `comp`5.1, `hlth`5.1, `vel`5.1, `conf`3 (leading dot), `fl` = `len(red_flags)` or `-`. 52 chars/row → 50 rows ≈ 2.8 KB.
+
+`/sn 64`:
+```
+<b>SN64 Chutes</b> · <code>64:4123456</code> · active · tier <b>A</b> (82.4)
+<pre>
+Health 84.1  Velocity 71.0  Composite 82.4 (raw 81.9)
+Conf .91  Regime TRENDING  as_of 2026-09-22 12:00Z
+P1 Chain      ████████░░ .81
+P2 Builder    █████████░ .90
+P3 Product    ██████░░░░ .60
+P4 Team       ███████░░░ .70
+P5 Community  ████████░░ .78
+P6 Narrative  ██████░░░░ .62
++ emission_share +3.2 · gate_margin +2.6 · dereg_safety +2.5
+- discord_growth_30d -0.2 · holder_dispersion -0.1
+Flags: none
+Events:
+ 09-21 info  release_upgrade   v2.3 shipped
+ 09-19 info  tier_change       B→A 76.8
+ 09-15 info  identity_changed  github_repo
+</pre>
+<a href="https://chutes.ai">web</a> · <a href="https://github.com/rayonlabs/chutes">github</a> · <a href="…">discord</a> · <a href="https://x.com/chutes_ai">x</a> · <a href="http://127.0.0.1:3001/subnet/64">open</a>
+```
+Bars: 10 cells, `█` × round(v·10), `░` rest; `null` → `░░░░░░░░░░ n/a`. Drivers = `explain.top_positive[:3]` / `explain.top_negative[:3]` (12 §2.10: `{metric, pillar, impact}`, impact in Health points). Flags line from `explain.flags`: `dereg_imminent ×0.60 since 09-10 (auto)`. Event line: `MM-DD sev(4) type(17) summary(≤28)` from `payload.summary`, else the template's short form. Pre-launch: header suffix `· pre-launch (no composite)`. Card ≈ 1.3 KB.
+
+`/flags` (from `red_flag_state`, `active = 1`, current `SPEC_VERSION`):
+```
+<b>Active red flags (7) · as_of 2026-09-22 12:00Z</b>
+<pre>
+ SN  name          flag                 x     since       state     src
+ 47  Foo           dereg_imminent       0.60  2026-09-10  active    auto
+ 82  Bar           emission_disabled    0.50  2026-08-30  clearing  auto
+ 113 TensorUSD     owner_extraction     0.70  2026-09-01  active    human
+ 9   Baz           owner_control_change 0.85  2026-09-12  active    sticky
+</pre>
+```
+`state` = `clearing` iff `false_since` is set, `src` = `human` iff `human = 1`, `sticky` iff `sticky = 1` (12 §2.8); ≈ 75 chars/row, chunked beyond ≈ 50 rows.
+
+`/movers 7`:
+```
+<b>Movers · 7d · composite_smoothed</b>
+<pre>
+▲ SN  name          from   to     Δ
+  19  Nineteen      55.1   66.3  +11.2
+…
+▼ SN  name          from   to     Δ
+  47  Foo           40.2   18.7  -21.5
+</pre>
+```
+`/health` (from 01's `/health`):
+```
+<b>TaoSentinel · degraded · up 1d 02h · v0.1.0+3fa2c1d · ts-1.0</b>
+reasons: collector_failing:github_activity
+<pre>
+scoring   latest 12:00Z prov · SCORING_KILLED no · KILL_SWITCH no · PAUSE_ALL no
+db        812 MB · backup 03:31Z (8.2 h)
+job               last_run  age     fail paused
+chain_sse         12:39:51  9s      0    -
+github_activity   06:00:12  6h40m   5    -
+x_team_poll       -         -       0    budget
+</pre>
+```
+One row per enabled job/task (≈ 45 chars/row; ≈ 40 rows ≈ 1.8 KB). `/spend` (from `/health.spend`, one row per group key):
+```
+<pre>
+group      month$   cap$   pct  state
+x           3.21    25     13%  ok
+llm        12.44    60     21%  ok
+taostats    0.00     0      -   disabled
+tmc      20,311 req / 90,000  23%  ok
+</pre>
+```
+`state` = `paused_reason` when paused, `disabled` when `cap_usd = 0` for a paid group (02 §F2), else `ok`.
+
+`/team add 64 "Jon Durbin" "founder" https://x.com/jondurbin` → `✅ team_members #3 added for SN64 (64:4123456) · candidate · profile: https://x.com/jondurbin`. `/team verify 3 https://chutes.ai/team` → `✅ #3 Jon Durbin verified · sources: x.com, chutes.ai` or `❌ needs a second independent source (found: x.com) — add e.g. the official team page`. Usage errors reply the command's usage line.
+`/product set 64 live https://chutes.ai/app` → `✅ SN64 product_status = live (was beta)`.
+`/flag confirm 113 owner_extraction https://…` → confirm keyboard → `🚩 SN113 owner_extraction CONFIRMED · takes effect at the next scoring run (≤ 6 h)`; `/flag clear 9 owner_control_change https://…` → `✅ … cleared (30-d suppression)` or `❌ flag_not_active: owner_control_change is not active for SN9`.
+`/pause x` → confirm keyboard → toast `⏸ x paused by telegram (5 jobs)`; `/resume x` with `data/control/x.paused` present → `⚠️ x still paused: delete data/control/x.paused`.
+`/review`:
+```
+<b>Open reviews (3)</b>
+<pre>
+ id  SN   kind                        pri  age
+ 17  113  owner_extraction_candidate  1    2d
+ 21  64   team_candidate              2    5d
+ 25  12   owner_source_disagreement   3    1d
+</pre>
+/review resolve &lt;id&gt; confirm_flag|dismiss|done [url] · /owner whitelist &lt;id&gt; &lt;reason&gt; &lt;url&gt;
+```
+`/needsreview`:
+```
+<b>Needs review · 2026-09-22</b>
+<pre>
+new occupants (2):            SN130 (3d), SN131 (1d)
+source disagreements (3):     SN12 github_repo, SN77 subnet_url, SN9 discord
+open review items (4):        owner_extraction_candidate 1, team_candidate 3
+team candidates (31):         SN1 ×4, SN13 ×3, …
+team unknown (14):            SN2, SN7, SN9, …
+product status unset (22):    SN3, SN5, SN8, …
+sites blocked ≥ 7 d (2):      SN41 bot_challenge, SN88 robots
+</pre>
+```
+Each bucket line lists at most 12 items then `…`; ≈ 1 KB. 04's buckets render one line each, in 04's priority order, labelled from the reason (`registry.new_occupant` → "new occupants", `registry.source_disagreement_open` → "source disagreements", …; unknown reasons render verbatim).
+
+**Alert templates** (`app/alerts/templates.py`; `{ui}` = `UI_BASE_URL`; `{name}` from `subnets`; every value `esc()`-ed; a missing payload key renders as `?` via `format_map`, so a payload variant never breaks a send). Icons by severity for the generic form: 🛑 critical, ⚠️ warning, ℹ️ info.
+- generic (any type without its own line; the only form 01 needs on day one): `{icon} <b>{event_type}</b>{ · SN{netuid} {name}} · {severity}\n<code>{k=v, … first 6 payload keys, values ≤ 60 chars}</code>`.
+- `tier_change`: `🔺 <b>SN{netuid} {name}</b> tier {from} → {to} · composite {composite_smoothed:.1f} (prev {prev_composite_smoothed:.1f}) · <a href="{ui}/subnet/{netuid}">open</a>` (`🔻` when `direction` is down).
+- `red_flag_raised`: `🚩 <b>SN{netuid} {name}</b> red flag <code>{flag}</code> ×{multiplier:.2f} (total ×{flag_multiplier_total:.2f}){ · human}{ · sticky}\n<i>{detail, first 3 keys}</i>`.
+- `red_flag_cleared`: `✅ <b>SN{netuid} {name}</b> flag <code>{flag}</code> cleared ({reason}) after {(as_of − raised_at)/86400:.0f} d`.
+- `score_jump`: `📈 <b>SN{netuid} {name}</b> composite {prev_composite:.1f} → {composite:.1f} ({delta:+.1f}) · flags +{flags_added} −{flags_removed}` (`📉` when `delta < 0`).
+- `collector_failing`: `⚠️ collector <code>{collector}</code> failing ×{consecutive_failures} · last: <i>{last_error}</i> · /pause {collector}`.
+- `collector_recovered`: `✅ collector <code>{collector}</code> recovered after {failures} failures ({down_seconds/60:.0f} min)`.
+- `spend_80pct`: `💸 <code>{group}</code> at {pct:.0%} of its {month} cap ({unit}){ · ${usd_mtd:.2f} / ${cap_usd:.2f} when unit = usd}`.
+- `spend_cap_reached`: `⛔ <code>{group}</code> monthly cap reached ({month}) · paused: {paused_jobs}`.
+- `backup_failed`: `🛑 backup failed: <i>{error}</i> · last good {last_good_name} ({last_good_age_h:.0f} h)`.
+- `dereg_watch`: `⏰ watchlist <b>SN{netuid} {name}</b> dereg risk: {reason} · rank {moving_price_rank} · immune {yes/no}{, {blocks_left_immunity/7200:.1f} d left} · dereg_safety {dereg_safety}`.
+- `netuid_reoccupied`: `♻️ <b>SN{netuid}</b> re-registered at block {new_network_registered_at} · {old_name} ({old_occupant_key}) → {new_name} · fresh history started`.
+- `identity_changed` (warning only): `🔁 <b>SN{netuid} {name}</b> {field} {kind}: <code>{old_value}</code> → <code>{new_value}</code> (source {source})`.
+- Batched (> `ALERT_BATCH_THRESHOLD`): header `📬 <b>{k} alerts</b>`, then one line per row using the same templates without links.
+
+### 8.6 Frontend fork
+
+Fork `E:\SN_Trader\SubnetTrader\frontend\` → `frontend/` (Next 14.2 app router, React 18, SWR 2.2, Tailwind 3.4, lightweight-charts 5.1). Keep: `layout.tsx`, `globals.css` (dark-only `bg-gray-950 text-gray-100`), `tailwind.config.ts`, `postcss.config.js`, `tsconfig.json` (`@/*`), `next.config.js`. Delete every old page/component except `NavBar.tsx` (rewritten), the `StatCard` (`research/page.tsx:99-107`) and `SortTh` (`research/page.tsx:134-154`) helpers, and the `NavChart` pattern (`strategy/page.tsx:150-214`). Brand string `TaoSentinel`. `package.json` `"start": "next start -p 3001"` for dev; production is 16's unit (§2.4: `node …/next/dist/bin/next start -p 3001 -H 127.0.0.1`, loopback bind). `output: 'standalone'` is **not** enabled.
+
+`src/lib/api.ts` changes vs. old (`api.ts:1-30`):
+```ts
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? `http://${window.location.hostname}:8090` : "http://localhost:8090");   // old: 8081
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";          // baked at build; mutation forms only
+export function authHeaders(extra?: Record<string,string>) { … unchanged … }
+export const fetcher = (url: string) => fetch(url).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); });   // reads send NO token
+export async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`${API_BASE}${path}`, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? String(r.status));
+  return r.json();
+}
+export const tierColor: Record<string,string> = { A: "text-emerald-400", B: "text-sky-400", C: "text-amber-400", D: "text-orange-400", F: "text-red-400" };
+```
+Behind `tailscale serve` the UI must be built with `NEXT_PUBLIC_API_URL=https://<host>.<tailnet>.ts.net:8443` (16 §2.14; the default `http://<host>:8090` is mixed content on an https page) and that origin added to `CONTROL_ALLOWED_ORIGINS`.
+
+`src/hooks/useScoreStream.ts` (adapt `usePriceStream.ts`, which uses `onmessage`): `new EventSource(`${API_BASE}/api/v1/stream?types=score,event`)`; the frames are **named**, so use `es.addEventListener("score" | "event" | "resync", …)` (`onmessage` only sees unnamed frames); `score` → `mutate(key => typeof key === "string" && key.includes("/api/v1/subnets"))`; `event` → `mutate(k => …includes("/api/v1/events"))`; `resync` → global `mutate()`; close on unmount; reconnect (with `Last-Event-ID`) is the browser's.
+
+Pages and components:
+
+| route | file | components | data |
+|---|---|---|---|
+| `/` | `app/page.tsx` | redirect `/matrix` | — |
+| `/matrix` | `app/matrix/page.tsx` | `FilterBar` (tier multi-select, min-confidence slider 0–1, include pre-launch / insufficient toggles, search), `MatrixTable` (`SortTh` headers: netuid, name, tier (`TierBadge`), composite, health (= `quality`), velocity, P1..P6 (`HeatCell` 0–1 → 5-step gray→emerald, `null` → hatched "n/a"), confidence, flags (`FlagChips` from `score.red_flags` names), `Sparkline` 7-d inline SVG 80×20), `CsvButton` → `window.open(`${API_BASE}/api/v1/matrix.csv?…`)`, `StatCard` row (count, `as_of`, stale banner, regime) | `useSWR(/api/v1/subnets?…, {refreshInterval: 60000})` + `useScoreStream()` |
+| `/subnet/[netuid]` | `app/subnet/[netuid]/page.tsx` | `ScoreHeader` (tier, composite, confidence, stale/pre-launch/insufficient badges, links), `PillarBars` (6 bars, coverage tooltip), `ScoreChart` (lightweight-charts `LineSeries` composite + `quality` + `velocity` over `history_90d`, `createPriceLine` at 75/60/45/30), `ExplainPanel` (top ± drivers, `score.red_flags` objects with multiplier/since/state/origin, coverage, regime, spec_version — `explain` verbatim), `EvidenceTable` (metric, pillar, `m`, raw, raw_status badge: ok / "verifiable absence" / "collection failure" / n/a, `raw_as_of`, fresh dot vs `freshness_s`, link — 02 §H2), `SiteStatus` (latest `site_down_7d`/`site_recovered`; for a recovery shows `reason` `up` / `target_changed` / `target_retired`), `EventsTimeline` (last 20), `TeamPanel` (members with status) + `TeamForm` (candidate, POST `/api/v1/manual/team`) + inline `VerifyForm` (two URL fields, POST `/api/v1/manual/team/{id}/verify`; shows 409 `needs_second_source`), `ProductPanel` + `ProductForm` (POST `/api/v1/manual/product`), `NotesPanel` + `NoteForm` (POST `/api/v1/manual/note`) | `useSWR(/api/v1/subnets/{n}, {refreshInterval: 30000})` |
+| `/events` | `app/events/page.tsx` | `EventFilters` (severity chips, type multi-select, netuid input, since presets 24h/7d/30d), `EventsFeed` (virtualised list, `LoadMore` via `before_id`) | `useSWR(/api/v1/events?…)` + stream |
+| nav | `components/NavBar.tsx` (rewrite of the 71-line old one) | links Matrix / Events; right side: dot from `useSWR(/health, {refreshInterval: 30000})` — green `status === "ok"`, amber `degraded` (tooltip = `degraded_reasons`), grey `initializing`, red fetch error | |
+
+Flag, owner and review actions stay on Telegram/CLI (no UI) to keep the UI minimal. Forms disable themselves with the hint "set NEXT_PUBLIC_API_TOKEN and rebuild" when `API_TOKEN` is empty **and** a probe `POST /api/v1/manual/note` with an empty body returns 401 (auth on, no token baked; with auth off it returns 422 and writes nothing). Product/note forms require `evidence_url` (`type="url" required`). Read pages carry no token (open tier). The browser's `Origin` (`:3001` or the tailnet UI) must be in `CONTROL_ALLOWED_ORIGINS` for CORS and the origin guard.
+
+### 8.7 Step order
+
+Phase 0 (01 implements from this spec): `app/alerts/routing.py` (§2.4), `app/alerts/templates.py` (generic template at least), `app/notifications/format.py`, the `alert_dispatch` job, the control routes (pause/resume via 16's `app/control.py`), `/health` + Phase-0 services probes.
+
+Phase 11 (this spec):
+1. `ApiContext.from_runtime`, `create_app(ctx=None)` extension, `errors.py` (`from_action_result`, `origin_guard`).
+2. `queries.py` + `models.py`; `scores.py`, `subnets.py` (evidence per 02 §H2), `events.py`. Contract tests (feed shape pinned against 15's `feed_models.py`).
+3. `export.py` (ETag), `quant.py`.
+4. `hub.py` + `stream.py`; 12's score writer and 03's `emit_event` call `hub.nudge()` (one line each; a missing hub is a no-op).
+5. `manual_service.py`, `manual.py` (11 delegation), `review.py`, `control.py` rescore route; `rescore` accessor from 12.
+6. Telegram: `commands.py`, the §8.4 transport changes, `bot.py` (`telegram_bot` LongTask registered via 01's `JOB_TABLE`).
+7. `watch.py` (`dereg_watch`), `digest.py` (`needs_review_digest`); full §8.5 alert templates.
+8. Frontend fork; build; unit (16).
+
+---
+
+## 9. Tests
+
+**Fixtures** (`tests/api/conftest.py`): `db` = a temp-file `Database` with 03's schema applied (`migrate()`); `seed_two_occupants(db)` inserts `subnets`/`occupants` for **SN64 `64:4123456`** (active, tier A, composite 82.4, confidence 0.91, `red_flags='[]'`, 8 official history rows + 1 provisional, the 45 `stage='norm'` rows of its latest slot incl. one `absent` and one `failed`, 3 events, 1 verified team member, product `live`) and **SN47 `47:4000001`** (active, tier D, composite 18.7, confidence 0.55, `red_flags='["dereg_imminent"]'` with `explain.flags=[{"flag":"dereg_imminent","multiplier":0.6,"since":1789948800,"state":"active","origin":"auto",…}]`, a `red_flag_state` row `active=1`, 2 official rows, a `chain_ticks` row with `deregistration_risk=1`), plus optional **SN130 `130:4590000`** `pre_launch` with `composite NULL` and **SN9** with a sticky `owner_control_change` state row. All `scores.as_of` are slot instants (00:00Z / 12:00Z) and `computed_at` = slot + 15 min. `ctx` = `ApiContext` over a fake runtime (`health` returns a canned 01-shaped dict, `rescore` records calls, `hub=StreamHub(db)`); 11's domain functions are the real ones (they are DB-only). `client` = `httpx.AsyncClient(transport=ASGITransport(app=create_app(ctx)), base_url="http://test")`. `monkeypatch.setenv("API_AUTH_TOKEN", "t0k3n…")` where auth matters; probe egress is mocked with `respx`.
+
+| test | asserts |
+|---|---|
+| `test_health_passthrough` | `/health` body == `ctx.health()` byte-for-byte (no added keys, 02 §G6); 503 path never 500s |
+| `test_health_services_probes` | the 12 keys present; passive probes make **no** HTTP call (respx asserts none for tmc/discord/x); `cached` true on a second call within 60 s; a probe raising → `state=="fail"`, others unaffected |
+| `test_scores_latest_contract` | 2 rows sorted desc; `quality==84.1`; `ttl_seconds==25200`; `stale` false; `as_of=="…T12:00:00Z"` (slot) and `computed_at=="…T12:15:00Z"`; SN47 `red_flags == ["dereg_imminent"]` (names, 02 §B6/§H1); response validates against 15's `FeedPayload` |
+| `test_scores_latest_filters` | `min_confidence=0.6` → 1 row; `tier=A` → 1; `include_prelaunch` toggles SN130 (`composite None`); a 0.3-confidence row appears only with `include_insufficient=1` |
+| `test_scores_latest_killed_and_empty` | `SCORING_KILLED` in tmp cwd → `stale true`, rows returned; unknown spec → 200, `count 0`, `as_of None`, `stale true` |
+| `test_history_resolves_netuid_and_key` | `occupant=64` and `occupant=64:4123456` identical; `official_only` drops the provisional row; unknown → 404 |
+| `test_subnets_list_spark` | `spark_7d` length 7 ascending; SN47 has 2 points, never padded; `stale` present |
+| `test_subnet_detail` | `explain` verbatim; `score.red_flags[0]` = object from `explain.flags` with `multiplier 0.6`; evidence = 45 rows in registry order, `absent` row has `raw_status "absent"` and `m 0.0`, `failed` row `m None`; `freshness_s` = `METRICS[k].freshness_s`; `site.reason` shown for a seeded `site_recovered(reason='target_changed')`; 404 for netuid 999 |
+| `test_events_filters_pagination` | `severity`, `type`, `netuid`, relative `since=24h`, `before_id` keyset |
+| `test_matrix_csv_etag` | header row exact; `red_flags` `;`-joined names; `ETag`; `If-None-Match` → 304; a new score row changes the ETag |
+| `test_export_json_equals_latest` | byte-equal bodies |
+| `test_quant_results` | tmp dir with `factor_survivorship_20260922_101500.json`, `verdict_quality_cg_20260922_101500.json`, `trials.json`, `x.ic_series.json`, `bad.json`, `../escape.json` → kinds `factor`/`verdict`, sidecars not listed, `errors`, 404 on traversal |
+| `test_auth_and_origin` | POST without header → 401 when token set; with header → 2xx; token empty → 2xx; foreign `Origin` → 403 `origin_not_allowed` even with auth off; no `Origin` (curl) → allowed |
+| `test_manual_team_routes` | add → candidate + 11's `team_member_added` event; verify with one URL on the profile's domain → 409 `needs_second_source`; verify with an attestation URL on a second domain → 200 `status verified`; reject → `rejected`; duplicate → 409 `duplicate_member`; disclosure → `manual_notes(kind='team_disclosure')` |
+| `test_manual_flag_rules` | confirm `silence_45d` → 422; clear `owner_control_change` when inactive → 409 `flag_not_active`; clear SN9's sticky `owner_control_change` → 201; confirm then clear `owner_extraction` → 2 rows, latest `cleared` (02 §D5) |
+| `test_manual_owner_routes` | whitelist → `owner_event_whitelist` row, retire sets `retired_at`; compromise with a 60-day window → 422 `window_too_long` |
+| `test_registry_routes` | unauthenticated POST to `/registry/overrides`, `/overrides/{id}/status`, `/registry/refresh`, `/reoccupied/{id}/ack` → 401, cross-origin → 403; `force` override without `evidence_url` → 422 `invalid_override`; valid override → 201 and `GET /registry/overrides?netuid=` lists it; alias `/manual/override` hits the same handler; status `retired` → 200, then no longer active; ack of a `netuid_reoccupied` event writes `manual_notes.ref_event_id` and removes it from `needs-review?reason=reoccupied_unreviewed`; `refresh` → 202 with `started` = both registry job ids |
+| `test_needs_review_merge` | `queries.needs_review` with a stubbed `compute_needs_review` returning `new_occupant` + `source_disagreement_open` items → buckets `registry.new_occupant`, `registry.source_disagreement_open` first, in 04's order, then `queue`, `team_candidates`, …; stub raising → `registry.error` bucket, other buckets intact |
+| `test_review_routes` | list open items; `resolve … confirm_flag` without `evidence_url` → 422 `evidence_required`; `dismiss` → status `rejected` |
+| `test_control_pause_resume` | pause `x` (group) → one `control_state` row `target='x'`, `members` = the group's ids, no file written under `data/control/`; pause `github` when it is neither a job id nor a group → 404 (no prefix matching); pause `telegram_bot` → 409 `not_pausable`; resume deletes the row; resume with `data/control/x.paused` present → `paused true`, `file_pause_active`; idempotent `changed:false` |
+| `test_control_rescore` | 202 with run_id; `shadow` with `SPEC_VERSION` → 422; running → 409; killed → 423 |
+| `test_cors_and_methods` | `OPTIONS` preflight from an allowed origin OK; disallowed origin → no ACAO; `PUT`/`DELETE` → 405 |
+| `test_sse_smoke` | open `/api/v1/stream`; insert a score row + `hub.nudge()` → `event: score` frame < 2 s with `id: <sid>-<eid>`; reconnect with that id after a new `StreamHub` (restart) replays the missed frame; a gap > `STREAM_REPLAY_MAX` → `resync`; 9th connection → 503 |
+| `test_stream_disabled` | `STREAM_ENABLED=false` → 404 |
+
+**Telegram** (`tests/notifications/`): `FakeTransport` subclass of `TelegramBot` overriding `_post` to append `(method, payload)` and `_fetch_updates` to pop a scripted queue.
+| test | asserts |
+|---|---|
+| `test_top_format` | `/top 50` → `<pre>` present, every message ≤ 4,096 UTF-16 units, rows sorted, `fl` column |
+| `test_sn_card` | bars match seeded pillars; `null` pillar → `n/a`; drivers from `explain.top_positive`; links outside `<pre>`; keyboard attached |
+| `test_flags_movers_health_spend` | non-empty tables; `/flags` shows `sticky` for SN9; `/movers 400` clamps to 90; `/health` uses `status`/`degraded_reasons`; `/spend` one row per `/health.spend` key |
+| `test_team_commands` | `shlex` parses quoted name/role; `/team verify` one-source → `needs a second independent source`; rows written with `created_by="telegram"` |
+| `test_confirmations` | `/flag confirm …` → keyboard with `do:x:<nonce>` (≤ 64 bytes); callback executes once; a reused or expired nonce → "expired"; `/owner compromise` same |
+| `test_pause_two_step` | `/pause x` → keyboard; callback `do:pause:x` → `control_state` row + toast; `answerCallbackQuery` called first |
+| `test_unauthorized_chat_ignored` | message from a chat outside `TELEGRAM_ALLOWED_CHAT_IDS` → no `sendMessage` |
+| `test_chunking` | 6 KB table → 2 messages, each with balanced `<pre>`, each ≤ 4,096 |
+| `test_handler_exception_contained` | handler raising → reply `⚠️ command failed`, loop continues |
+| `test_token_redacted_in_logs` | a `telegram_bot` request log line contains `bot***`, never the token |
+
+**Routing and alerts** (`tests/notifications/test_routing.py`, `test_alerts.py`, `test_digest.py`, `test_watch.py`):
+- `test_routing_matches_catalog`: the set of `ROUTES` keys (taxonomy row expanded) == 03's `catalog.EVENT_TYPES`; for every type the route equals 03's alert column mapped `yes→immediate`, `digest→digest`, `no→none`, `direct→direct`, `yes if …→conditional`, except the documented 02 §D4 override `x_budget_paused → digest`.
+- `test_route_for_rules`: `payload.backfilled` → digest for `tier_change`; unknown type → digest (logged once); `identity_changed` warning/chain/`github_repo` → immediate, `owner_coldkey` → digest; taxonomy `critical` → immediate, `warning` → digest; `registry_anomaly` third consecutive day → immediate, first → digest; `score_jump` → immediate; `insufficient_data`, `rank_instability`, `owner_extraction_detected`, `emission_disabled` → digest; `ALERT_MIN_SEVERITY=warning` demotes `collector_recovered`; a 30-h-old `tier_change` → `digest_late`.
+- `test_dispatch` (drives 01's job with this spec's data): pending rows of each route → `sendMessage` only for immediate ones; `alerted_at` set on every row with the right `payload.alert_route`; > threshold → one batched message; a `400` row retried as plain text then `alert_failed`; a `429` leaves `alerted_at` NULL.
+- `test_digest`: section 2 lists digest rows since the watermark (and backfilled rows as counts); the watermark stops below the oldest unrouted row; `/digest` does not move it; buckets `product_unset` and `blocked_sites` (7 `bot_challenge` days → listed, 6 → not).
+- `test_dereg_watch`: SN47 in `WATCHLIST_NETUIDS=[47]` → one `dereg_watch(reason='bottom3')`, a second tick the same day → no new row (dedupe `occ|reason|day`); SN64 → none; stale tick (> 30 min) → no event; immunity with 5 d left → `immunity_ending`.
+
+Mocked: all egress (`respx`), the limiter (`FakeLimiter` always-ok / never), time via `freezegun` (TTL, staleness, cron, late rule), filesystem via `tmp_path` + `monkeypatch.chdir`.
+
+---
+
+## 10. Verify checklist (Phase 11 done when all pass on the laptop)
+
+```bash
+cd ~/taosentinel && source .venv/bin/activate
+pytest tests/api tests/notifications -q                      # all passed
+curl -s localhost:8090/health | jq '.status,.version,.degraded_reasons'      # "ok" or "degraded", the deployed version, [] or reasons
+curl -s localhost:8090/api/health/services | jq '.services|to_entries[]|[.key,.value.state]'   # 12 rows; database/scheduler/disk/backup/telegram "ok"
+curl -s 'localhost:8090/api/v1/scores/latest' | jq '.count,.stale,.spec_version,.as_of,.ttl_seconds,.scores[0].red_flags'   # ≥100, false, "ts-1.0", "…T00:00:00Z"-style slot, 25200, a list of strings
+curl -s 'localhost:8090/api/v1/scores/latest?include_prelaunch=1' | jq '[.scores[]|select(.status=="pre_launch")]|length'   # ≥0, composite null on those
+curl -s 'localhost:8090/api/v1/subnets' | jq '.subnets[0].spark_7d|length'   # 7 after a week of runs
+curl -s 'localhost:8090/api/v1/subnets/64' | jq '.score.explain.top_positive, (.evidence|length), (.evidence[0]|keys)'   # ≤3 drivers, 45, keys incl. m, raw, raw_status, freshness_s
+curl -sI 'localhost:8090/api/v1/matrix.csv' | grep -Ei 'etag|cache-control'   # W/"…", public, max-age=300
+curl -s 'localhost:8090/api/v1/matrix.csv' | head -1              # exact header line from §3.5
+curl -sN --max-time 20 'localhost:8090/api/v1/stream' | head -5   # ": ping" or an "event: health" frame within 15 s
+curl -s -X POST localhost:8090/api/v1/manual/note -H 'Content-Type: application/json' -d '{"netuid":64,"text":"x","evidence_url":"https://example.com"}'   # 401 when API_AUTH_TOKEN set
+curl -s -X POST localhost:8090/api/v1/manual/note -H "X-Auth-Token: $API_AUTH_TOKEN" -H 'Origin: https://evil.example' -H 'Content-Type: application/json' -d '{"netuid":64,"text":"x","evidence_url":"https://example.com"}'   # 403 origin_not_allowed
+curl -s -X POST localhost:8090/api/v1/manual/note -H "X-Auth-Token: $API_AUTH_TOKEN" -H 'Content-Type: application/json' -d '{"netuid":64,"text":"verify note","evidence_url":"https://example.com"}' | jq .ok   # true
+curl -s -X POST localhost:8090/api/v1/manual/flag -H "X-Auth-Token: $API_AUTH_TOKEN" -H 'Content-Type: application/json' -d '{"netuid":64,"flag":"owner_control_change","action":"clear","evidence_url":"https://example.com"}' | jq .error   # "flag_not_active" (SN64 has no such flag)
+curl -s -X POST localhost:8090/api/v1/control/pause/x -H "X-Auth-Token: $API_AUTH_TOKEN" | jq '.paused,.members'; sqlite3 data/taosentinel.db "select target,value,set_by from control_state"   # true, [x jobs]; x|true|api
+touch data/control/x.paused; curl -s -X POST localhost:8090/api/v1/control/resume/x -H "X-Auth-Token: $API_AUTH_TOKEN" | jq '.paused,.file_pause_active'; rm data/control/x.paused   # true, "data/control/x.paused"
+curl -s -X POST localhost:8090/api/v1/control/pause/telegram_bot -H "X-Auth-Token: $API_AUTH_TOKEN" | jq .error   # "not_pausable"
+sqlite3 data/taosentinel.db "select json_extract(payload,'$.alert_route'),count(*) from events where observed_at > strftime('%s','now','-1 hour') group by 1"   # none/digest/immediate counts; no row older than ~60 s with alerted_at NULL
+# Telegram: /top, /sn 64, /flags, /movers, /health, /spend, /review, /needsreview, /digest, /team list 64, /pause x (confirm), /resume x — each answers within 5 s, no message > 4,096 chars
+# Alerts: python -c "…emit_event(db, event_type='tier_change', …)" on a scratch occupant → message ≤ 60 s, alerted_at set, payload.alert_route "immediate"
+cd frontend && npm ci && NEXT_PUBLIC_API_URL=http://127.0.0.1:8090 NEXT_PUBLIC_API_TOKEN=$API_AUTH_TOKEN npm run build   # then start the unit
+sudo systemctl restart taosentinel-frontend && sudo systemctl status taosentinel-frontend   # active (16 §2.4)
+# Browser: /matrix sorts by composite, tier filter, CSV downloads; /subnet/64 chart + evidence (absent vs failure badges) + team form (201) + verify form (409 with one source); /events filters; NavBar dot green/amber
+```
+
+---
+
+## 11. Open questions / operator decisions
+
+Resolved on 2026-09-23 and removed: column ownership (03's DDL, 02 §B7), alert emission ownership (02 §D3), `quality` naming (12 §2.15, 15), API watchdog (16 §2.5 amendments 3–4), x_provider probe (now passive), `/health` status grep (02 §G6).
+
+1. **Ports:** `8090`/`3001` avoid the old bot's `8081`/`3000` if SubnetTrader is revived on the same laptop. Confirm.
+2. **Token rotation requires `next build`** (baked `NEXT_PUBLIC_API_TOKEN`). Acceptable for a single-operator UI? Alternative: a `localStorage` token field on the forms (not in v1).
+3. **Digest cadence:** weekly Monday 08:00Z (= 10:00 CEST) carries every digest-routed event, so a digest-only item can wait up to 7 days (anything urgent pages through its red flag). Switch `NEEDS_REVIEW_DIGEST_DAY` to `*` for a daily digest if that is too slow.
+4. **Cross-spec items for the coordinator:** (a) 02 §H3 lets an "operator attestation note" be the second verification item, but 11 §2.2.2 counts only URLs ("no override flag") — this spec passes `note` through and follows 11; (b) 03 §3.9 still marks `x_budget_paused` "yes if reason ∈ {pacing, provider_balance}" against 02 §D4 — this table follows 02; (c) 02 §G1's provider list has no Telegram id while 01's limiter table uses `telegram_bot` — this spec uses `telegram_bot`; (d) 01's `TELEGRAM_ALERTS_ENABLED` duplicates this spec's `ALERTS_ENABLED`.
+
+---
+
+## 12. Sources
+
+- `E:\TaoData\specs\02-cross-cutting-conventions.md` (A2, B1–B3, B6, B9, B12, D1–D5, E1–E4, F1–F2, G1, G3, G6, H1–H3, J1).
+- `E:\TaoData\specs\00-MASTER-SPEC.md` §1.3, §2, §5, §6, §7.5, §7.7, §9, §11, §12; `INDEX.md`; `18-operator-checklist.md` (A8 token, B3 Telegram, D1–D5 manual data).
+- Sibling specs: 01 §2.5–§2.11, §5, §6 (runtime, `/health`, control routes, limiter table, Telegram keys); 03 §3.1–§3.2, §3.6 (`scores`, `events`, `metric_values`, `team_members`, `manual_notes`, `manual_flags`, `review_queue`, `control_state`, `red_flag_state`, `web_checks` DDL; events triggers), §3.9 (events catalog, alert column); 04 §2.10–§2.11 (needs-review, registry routes); 07 §2.4, §3.5 (`bot_challenge`, `site_recovered.reason`); 11 §2.2, §2.10, §2.12 (domain API, `ActionResult`); 12 §2.4, §2.8, §2.10, §2.13, §2.15 (registry, red-flag state, explain, rescore, read contract); 13 §3 (result file names); 15 §3.1–§3.2 (feed model); 16 §2.4, §2.5, §2.7, §2.10, §2.11, §2.13, §2.14 (units, liveness, backup manifests, `/health.spend`, pause precedence, ops routing, tailnet).
+- `E:\TaoData\research\02-gapfill-old-bot-runtime-skeleton.md` §1 (`/health`, `/api/health/services`, SSE, two-tier auth), §4 (auth + `configure()` injection), §5 (frontend shell), §7 (tests), Gotchas (hot-reload, cwd-relative paths, routers must not import main, CORS GET/POST only, baked token).
+- `E:\TaoData\research\01-whale-research-ops.md` §3 Telegram (send_alert, long-poll, keyboards, two-step confirm, `TelegramCommandHandlers` injection, setMyCommands).
+- `E:\TaoData\research\02-gapfill-github-canonical-repo-resolution.md` (`/rate_limit` quota-free); `02-gapfill-discord-telegram-topology.md`.
+- Old bot (line numbers spot-checked 2026-09-23): `E:\SN_Trader\SubnetTrader\app\main.py` 2144-2228 (factory; CORS 2171-2179; configure lambdas 2205-2214), 2230-2283 (`/health`; 2280-2282 unavailable blocks), 2285-2441 (`/api/health/services`; Telegram probe 2325-2366), 3166-3225 (SSE: counter 3180/3209-3210, `is_disconnected` 3183, headers 3212-3225), 3258-3265 (non-loopback warning), 3424-3435 (bot task); `app\api_auth.py` 1-36; `app\test_api.py` 5-10; `app\strategy_api.py` 1-60 (`configure()`); `app\backtest_api.py` 30 (`RESULTS_DIR`), 80-86 (`_run_ts`); `app\notifications\telegram.py` 27-45, 52-87, 90-94, 97-111, 138-140, 142-168, 170-227, 229-259, 261-294 (chat check 271-274), 296-338 (300-303), 340-347, 349-397 (dropped), 398-486, 488-514, 516-545; `deploy\auto-update.sh` 161 (whitespace-tolerant status grep); `frontend\src\lib\api.ts` 1-30; `frontend\src\hooks\usePriceStream.ts` 1-41 (`onmessage`); `frontend\src\app\research\page.tsx` 99-107 (`StatCard`), 134-154 (`SortTh`); `frontend\src\app\strategy\page.tsx` 150-214 (`NavChart`); `frontend\src\components\NavBar.tsx` 1-71.
+
+---
+
+## Changelog
+- 2026-09-23 reconciliation + review:
+  - §2.4 rebuilt as 03 §3.9's alert column row for row, liftable as `app/alerts/routing.py` for 01's Phase-0 `alert_dispatch`; `route_for` precedence (backfilled → digest, unknown → digest, late/severity demotion); detection events of red-flag conditions digest-only; `identity_changed` warning-only rule; `score_jump` immediate; budget events and `x_budget_paused` → digest; dedupe left to 03's `dedupe_key` (D3, D4, D2, J1).
+  - Feed per H1/B6: latest row per current occupant, slot `as_of` + `computed_at` (ISO), `red_flags` as names, null-tolerant rows, empty = 200; `SCORE_FEED_TTL_SEC` 25200; fixtures/tests switched to names.
+  - Evidence panel reads `stage='norm'` rows of the score's slot, absent vs failed from `raw_status`, per-metric freshness from 12's registry (H2, B3).
+  - `/health` served from 01's builder, no own shape; `spend` group-keyed per 16 (G6); config de-duplicated to 01/16 owners, `SCORING_SPEC_VERSION` alias (F1, F2).
+  - Manual flags: confirm {owner_extraction, key_compromise}, clear also owner_control_change while active, 409 `flag_not_active` (D5); team verify/reject/disclosure, owner whitelist/compromise, review list/resolve routes + Telegram commands calling 11 §2.12, 409 `needs_second_source` (H3); `manual_notes.body`, 03 team vocabulary.
+  - Pauses via 16's `app/control.py` → `control_state`; exact ids or `PAUSE_GROUPS`, no prefixes; emergency-file resume reply; reason vocabulary; `alert_dispatch`/`telegram_bot` `ops_exempt` and unpausable (B12, E1).
+  - One job table §6.1 (`alert_dispatch` by 01, `telegram_bot`, `dereg_watch`, `needs_review_digest`) (E2, D3).
+  - Review fixes: complete route inventory (01/04/11/12/16 routes), origin guard against cross-site POSTs, SSE ids = rowid watermarks (replay survives restarts), named-event `addEventListener`, passive probes (no TMC/Discord/X spend, G3), quant kinds per 13's file names, `dereg_watch` on `block_number`/local immunity with 03 dedupe, Telegram via `Http` with token redaction and 64-byte callback nonces, corrected old-bot line refs.
+  - Coordinator additions: digest buckets `product_unset` and `blocked_sites` (07 `bot_challenge`/robots ≥ 7 d); subnet detail shows `site_recovered.payload.reason`.
+  - Rejected package items: 12-reviewer's "no manual clear of owner_control_change", "read scores.observed_at / red_flags objects", "metric_norm table" (contradict D5, B6, B3); 11-reviewer's immediate routing of owner detection events and the owner_coldkey suppression rule (contradict D4/D1).
+- 2026-09-24 final pass: §8.3 `needs_review` calls 04's `compute_needs_review(db, now: int) -> list[ReviewItem]` and merges its reasons as top-level `registry.<reason>` buckets in 04's priority order (error → `registry.error`); `/needsreview` rendering and `test_needs_review_merge` updated.
+- 2026-09-24 final pass: 04 ships no router (04 §8.1), so 14 owns `app/api/registry.py`: registry reads, needs-review, `manual_overrides` list/create/status (no delete — status transitions only), `registry/refresh` (run-now of `registry_occupants`/`registry_identity`) and reoccupation ack (`manual_notes.ref_event_id`); all mutations authed + origin-guarded; Phase 11 (04's CLI before); `test_registry_routes` added.

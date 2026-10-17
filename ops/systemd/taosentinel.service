@@ -1,0 +1,57 @@
+[Unit]
+Description=TaoSentinel subnet scoring service (FastAPI on 127.0.0.1:8090)
+Documentation=file://@SENTINEL_ROOT@/specs/16-ops-deploy-and-observability.md
+After=network-online.target time-sync.target
+Wants=network-online.target
+# Crash recovery rate limit: 5 restarts in 60 s, then give up (the OnFailure notifier fires).
+StartLimitIntervalSec=60
+StartLimitBurst=5
+OnFailure=taosentinel-notify-failure@%n.service
+
+[Service]
+# Watchdog: the app sends WATCHDOG=1 every WATCHDOG_USEC/2 (60 s) only while _jobs_live()
+# is true (spec 01 §2.8 + spec 16 §2.5). A withheld ping -> SIGABRT -> Restart=on-failure.
+# A watchdog restart recurs no faster than ~120 s apart, so it never trips the 5-in-60s limit.
+Type=notify
+NotifyAccess=main
+WatchdogSec=120
+# READY=1 is sent after the scheduler starts; nothing slow (backup, quick_check) precedes it.
+TimeoutStartSec=120
+User=@SENTINEL_USER@
+Group=@SENTINEL_GROUP@
+WorkingDirectory=@SENTINEL_ROOT@
+Environment=TAOSENTINEL_ROOT=@SENTINEL_ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=SQLITE_TMPDIR=@SENTINEL_ROOT@/data/tmp
+# ~/.cache is read-only under ProtectHome=read-only; libraries that cache there write here instead.
+Environment=XDG_CACHE_HOME=@SENTINEL_ROOT@/data/cache
+ExecStartPre=/usr/bin/mkdir -p @SENTINEL_ROOT@/data/logs @SENTINEL_ROOT@/data/backups/manual @SENTINEL_ROOT@/data/run @SENTINEL_ROOT@/data/control @SENTINEL_ROOT@/data/tmp @SENTINEL_ROOT@/data/quarantine @SENTINEL_ROOT@/data/cache
+ExecStart=@SENTINEL_ROOT@/.venv/bin/python -u -m app serve
+# append: needs systemd >= 240 and an existing data/ directory (the installer creates it).
+StandardOutput=append:@SENTINEL_ROOT@/data/service.log
+StandardError=append:@SENTINEL_ROOT@/data/service.log
+Restart=on-failure
+RestartSec=10
+# Graceful shutdown: the app owns SIGTERM (uvicorn capture_signals neutralised), closes the DB
+# under SHUTDOWN_DEADLINE_SEC=10 and _hard_exit(0)s; 30 s is only the outer guard.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+# Hardening. The service writes only under data/ (+ the mirror, which lives outside /home).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@SENTINEL_ROOT@/data
+@MIRROR_RW_LINE@
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryMax=2G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

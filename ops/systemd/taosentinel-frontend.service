@@ -1,0 +1,31 @@
+[Unit]
+Description=TaoSentinel UI (Next.js on 127.0.0.1:3001)
+After=taosentinel.service
+Wants=taosentinel.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@SENTINEL_USER@
+Group=@SENTINEL_GROUP@
+WorkingDirectory=@SENTINEL_ROOT@/frontend
+# The installer rewrites @NODE_DIR@ to the node bin dir the user's login shell resolves.
+# Re-run sudo ops/install-systemd.sh --with-frontend after a node upgrade.
+Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+# Equivalent to `npm run start` (package.json "next start -p 3001") plus a loopback bind.
+ExecStart=@NODE_DIR@/node @SENTINEL_ROOT@/frontend/node_modules/next/dist/bin/next start -p 3001 -H 127.0.0.1
+StandardOutput=append:@SENTINEL_ROOT@/data/frontend.log
+StandardError=append:@SENTINEL_ROOT@/data/frontend.log
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

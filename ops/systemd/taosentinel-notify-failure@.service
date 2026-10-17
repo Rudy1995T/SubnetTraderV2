@@ -1,0 +1,10 @@
+[Unit]
+Description=TaoSentinel failure notifier for %i
+
+[Service]
+Type=oneshot
+User=@SENTINEL_USER@
+Group=@SENTINEL_GROUP@
+Environment=SENTINEL_ROOT=@SENTINEL_ROOT@
+ExecStart=/usr/bin/env bash @SENTINEL_ROOT@/ops/notify-failure.sh %i
+TimeoutStartSec=30

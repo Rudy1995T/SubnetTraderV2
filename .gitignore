@@ -1,0 +1,13 @@
+.env
+.venv/
+data/
+seed/*
+!seed/*.example
+KILL_SWITCH
+PAUSE_ALL
+SCORING_KILLED
+DEPLOY_PAUSED
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/

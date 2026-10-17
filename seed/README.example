@@ -1,0 +1,11 @@
+Operator-provided seed data (gitignored except *.example). Checklist A3 — copy from the Windows PC:
+  seed/ledger.db              ← E:\SN_Trader\SubnetTrader\data\ledger.db            (868 MB)
+  seed/ledger_backfill.db     ← E:\SN_Trader\SubnetTrader\data\backups\ledger_backfill.db (339 MB)
+  seed/fundamentals.json      ← data\fundamentals.json
+  seed/whale_cohort.json      ← data\whale_cohort.json
+  seed/whale_labels.json      ← data\whale_labels.json
+  seed/subnet_edge/*.md       ← research\subnet_edge\*.md
+  seed/app/                   ← the whole E:\SN_Trader\SubnetTrader\app\ tree (read-only porting reference)
+  seed/pi/ledger.db           ← (checklist A4) the Pi's ledger.db after `systemctl stop subnettrader`
+Later phases add: seed/discord_channels.csv (B5), seed/kol_accounts.csv (D3), seed/feeds.csv.
+Never copy the old .env or any wallet here.

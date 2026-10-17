@@ -1,0 +1,20 @@
+[Unit]
+Description=TaoSentinel git auto-deploy (fetch, gate, restart on change, rollback on failure)
+Documentation=file://@SENTINEL_ROOT@/specs/16-ops-deploy-and-observability.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@SENTINEL_USER@
+Group=@SENTINEL_GROUP@
+WorkingDirectory=@SENTINEL_ROOT@
+Environment=SENTINEL_ROOT=@SENTINEL_ROOT@
+Environment=SENTINEL_SECRETS=@SENTINEL_SECRETS@
+Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
+# Defense-in-depth against leaking the token-bearing fetch URL into journald.
+Environment=GIT_TRACE=0 GIT_TRACE_PACKET=0 GIT_TRACE_CURL=0 GIT_CURL_VERBOSE=0
+ExecStart=/usr/bin/env bash @SENTINEL_ROOT@/deploy/auto-update.sh
+# Bound a hung fetch / pip / build so a stuck run cannot block the next tick.
+TimeoutStartSec=900
+Nice=10

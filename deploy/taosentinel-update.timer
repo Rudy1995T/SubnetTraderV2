@@ -1,0 +1,12 @@
+[Unit]
+Description=Check GitHub for TaoSentinel updates every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+AccuracySec=15s
+Unit=taosentinel-update.service
+
+[Install]
+WantedBy=timers.target

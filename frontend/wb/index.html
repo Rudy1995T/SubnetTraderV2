@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subnet Workbench</title>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --surface-2: #f1f0ec;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-7: #6250d6;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b; --good-text: #006300;
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-7: #9085e9;
+    --good-text: #0ca30c; --accent: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-7: #9085e9;
+  --good-text: #0ca30c; --accent: #3987e5;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 14px 16px 6px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline; }
+h1 { font-size: 18px; margin: 0; font-weight: 650; }
+h2 { font-size: 14px; margin: 0 0 8px; font-weight: 650; }
+.muted { color: var(--text-muted); } .sec { color: var(--text-secondary); }
+.banner { margin: 0 16px 8px; padding: 8px 12px; border-radius: 6px; background: var(--surface-2);
+          border-left: 4px solid var(--critical); display: none; }
+.weather { margin: 0 16px 10px; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+.weather b { font-variant-numeric: tabular-nums; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; padding: 0 16px 24px; }
+@media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+input, select, button { font: inherit; color: var(--text-primary); background: var(--surface-2);
+       border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; } button:hover { border-color: var(--accent); }
+.tablewrap { overflow: auto; max-height: 62vh; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+th, td { padding: 4px 6px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600;
+     cursor: pointer; user-select: none; }
+th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+tbody tr:hover { background: var(--surface-2); cursor: pointer; }
+tbody tr.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+.na { color: var(--text-muted); }
+.neg { color: var(--critical); } .pos { color: var(--good-text); }
+.badge { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--border);
+         color: var(--text-secondary); }
+.badge.crit { border-color: var(--critical); color: var(--critical); }
+.sliders { display: grid; grid-template-columns: 1fr; gap: 4px; }
+.slider { display: grid; grid-template-columns: 120px 1fr 42px; gap: 6px; align-items: center; font-size: 12.5px; }
+.slider input { width: 100%; padding: 0; }
+.ic { font-size: 11px; color: var(--text-muted); }
+.note { border-top: 1px solid var(--grid); padding: 6px 0; font-size: 12.5px; }
+#chart { height: 420px; }
+.explain td, .explain th { text-align: left; font-size: 12px; }
+.warn { font-size: 12px; color: var(--text-secondary); border-left: 3px solid var(--warning); padding-left: 8px; }
+.right { display: flex; flex-direction: column; gap: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Subnet Workbench</h1>
+  <span class="sec" id="asof">loading…</span>
+  <span class="muted">exploration · evidence only · not the official score · not fed to the bot</span>
+  <span style="flex:1"></span>
+  <label class="sec">API token <input id="token" type="password" size="12" placeholder="X-Auth-Token"></label>
+  <button id="theme" title="Toggle light/dark">◐</button>
+</header>
+<div class="banner" id="stale">Data is stale: the newest workbench rows are more than 2 h old (service or jobs down). Nothing is interpolated.</div>
+<div class="weather" id="weather"></div>
+<main>
+  <section class="card">
+    <div class="controls">
+      <input id="q" placeholder="filter: name or SN" size="18">
+      <label class="sec"><input type="checkbox" id="prelaunch"> pre-launch</label>
+      <span style="flex:1"></span>
+      <span class="sec" id="count"></span>
+    </div>
+    <div class="tablewrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+    <p class="muted" style="font-size:12px;margin:6px 0 0">— = absent (verifiably none) · ? = failed or not yet measured (hover for the reason) · gap/safety use the 30-day graduation-aware pool</p>
+  </section>
+  <aside class="right">
+    <section class="card">
+      <h2>Weights (exploration)</h2>
+      <p class="warn">Re-ranks the table by Σ w·percentile. Not validated, not the ts-1.0 score, not fed to the bot. IC = latest study's 7-day rank IC.</p>
+      <div class="sliders" id="sliders"></div>
+      <div class="controls" style="margin-top:8px">
+        <select id="presets"><option value="">— presets —</option></select>
+        <input id="pname" placeholder="preset name" size="12">
+        <button id="psave">Save</button><button id="pdel">Delete</button><button id="preset0">Reset</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Upload a chart screenshot</h2>
+      <div class="controls">
+        <input type="file" id="file" accept="image/png,image/jpeg,image/webp">
+        <label class="sec">SN <input id="upnet" size="4"></label>
+        <button id="upload">Read</button>
+      </div>
+      <div id="upres" class="sec" style="font-size:12.5px"></div>
+    </section>
+    <section class="card">
+      <h2>Study results</h2>
+      <div id="results" class="sec" style="font-size:12.5px"></div>
+    </section>
+  </aside>
+  <section class="card" style="grid-column: 1 / -1">
+    <div class="controls">
+      <h2 style="margin:0" id="ctitle">Select a subnet</h2>
+      <span style="flex:1"></span>
+      <select id="period"><option>1h</option><option selected>1d</option><option>5m</option></select>
+      <select id="bars"><option>120</option><option selected>365</option><option>720</option><option>1500</option></select>
+      <label class="sec"><input type="checkbox" id="logy" checked> log</label>
+    </div>
+    <div id="chart"></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:8px">
+      <div><h2>Explain</h2><table class="explain" id="explain"></table></div>
+      <div><h2>Notes &amp; events</h2><div id="notes"></div></div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let DATA = null, WEIGHTS = {}, SORT = store.get("wb.sort", { key: "rank_wb", dir: -1 }), SEL = null, IC = {};
+
+$("token").value = store.get("wb.token", "");
+$("token").addEventListener("change", () => store.set("wb.token", $("token").value));
+$("theme").onclick = () => {
+  const r = document.documentElement, cur = r.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  r.dataset.theme = cur === "dark" ? "light" : "dark"; store.set("wb.theme", r.dataset.theme); if (SEL) loadChart(SEL);
+};
+if (store.get("wb.theme", null)) document.documentElement.dataset.theme = store.get("wb.theme");
+
+const authHeaders = () => { const t = $("token").value; return t ? { "X-Auth-Token": t } : {}; };
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), ...authHeaders() } });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(typeof body.detail === "string" ? body.detail : (body.detail?.error || r.status)), { body, status: r.status });
+  return body;
+}
+
+// ── formatting ─────────────────────────────────────────────────────────────
+const fmt = {
+  num: (v, d = 2) => v == null ? null : Number(v).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }),
+  pct: (v, d = 1) => v == null ? null : (v * 100).toFixed(d) + "%",
+  px: (v) => v == null ? null : (v >= 1 ? v.toFixed(3) : v.toPrecision(4)),
+  int: (v) => v == null ? null : Math.round(v).toLocaleString(),
+};
+const logcap = (x, c) => x == null ? null : Math.min(1, Math.log1p(Math.max(0, x)) / Math.log1p(c));
+const recency = (d, a, b) => d == null ? null : d <= a ? 1 : d >= b ? 0 : 1 - (d - a) / (b - a);
+const zclip = (x, lo, hi) => x == null ? null : Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
+const mean = (xs) => { const v = xs.filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+
+function derive(r) {
+  const repo = r.cov?.repo_pushed_days;
+  const pushLeg = repo?.status === "absent" ? 0 : recency(r.repo_pushed_days, 14, 120);
+  r.dev_activity_wb = mean([logcap(r.commits_30d, 60), pushLeg]);
+  const legs = [logcap(r.discord_members, 5000), zclip(r.presence_ratio, .05, .35),
+                recency(r.x_last_activity_days, 7, 60), recency(r.tg_last_activity_days, 7, 60)];
+  const anyCov = ["discord_members", "presence_ratio", "x_last_activity_days", "tg_last_activity_days"].some((k) => r.cov?.[k]);
+  r.social_activity_wb = anyCov ? (mean(legs) ?? 0) : null;
+}
+
+const COLS = [
+  { key: "netuid", label: "SN", f: (v) => v },
+  { key: "name", label: "Name", f: (v) => v ?? "" },
+  { key: "price", label: "Price τ", f: fmt.px },
+  { key: "chg_24h", label: "24h", f: (v) => fmt.pct(v), sign: true },
+  { key: "chg_7d", label: "7d", f: (v) => fmt.pct(v), sign: true },
+  { key: "liquidity", label: "Pool τ", f: fmt.int },
+  { key: "emission_pct", label: "Emis %", f: (v) => fmt.num(v, 2) },
+  { key: "ema72_band_pos_1d", label: "Band 1d", f: (v) => fmt.num(v, 2), sign: true, metric: true },
+  { key: "ema72_band_pos_1h", label: "Band 1h", f: (v) => fmt.num(v, 2), sign: true, metric: true },
+  { key: "ema72_dist_1d", label: "Dist 1d", f: (v) => fmt.pct(v), sign: true, metric: true },
+  { key: "px_vs_moving", label: "Px/MP", f: (v) => fmt.pct(v, 2), sign: true, metric: true },
+  { key: "dd_90d", label: "DD 90d", f: (v) => fmt.pct(v, 0), metric: true },
+  { key: "rv_30d", label: "Vol 30d", f: (v) => fmt.pct(v, 0), metric: true },
+  { key: "dereg_rank_30d", label: "Rank30", f: (v) => fmt.int(v), metric: true, dereg: true },
+  { key: "mp_gap_to_cull_k_30d", label: "Gap cull", f: (v) => fmt.pct(v, 0), sign: true, metric: true },
+  { key: "immunity_remaining_days", label: "Immune d", f: (v) => v ? fmt.num(v, 1) : "0", metric: true },
+  { key: "dereg_safety_30d", label: "Safety", f: (v) => fmt.num(v, 2), metric: true },
+  { key: "hours_in_bottom_k_30d", label: "Hrs btm", f: fmt.int, metric: true },
+  { key: "commits_30d", label: "Commits", f: fmt.int },
+  { key: "repo_pushed_days", label: "Push d", f: (v) => fmt.num(v, 0), metric: true },
+  { key: "dev_activity_wb", label: "Dev", f: (v) => fmt.num(v, 2) },
+  { key: "social_activity_wb", label: "Social", f: (v) => fmt.num(v, 2) },
+  { key: "rank_wb", label: "Score", f: (v) => fmt.num(v, 2) },
+];
+
+function cell(r, c) {
+  let v = r[c.key];
+  const cov = r.cov?.[c.key];
+  if (v == null && c.metric) {
+    if (cov?.status === "absent") return `<td class="na" title="absent: ${cov.reason || ""}">—</td>`;
+    if (cov?.status === "not_applicable") {
+      const g = cov.graduates_at ? " · graduates " + new Date(cov.graduates_at * 1000).toISOString().slice(0, 10) : "";
+      return `<td class="na" title="not applicable: ${cov.reason || ""}${g}">n/a</td>`;
+    }
+    return `<td class="na" title="${cov ? "failed: " + (cov.reason || "") : "not measured yet"}">?</td>`;
+  }
+  if (v == null) return `<td class="na">·</td>`;
+  let txt = c.f(v), cls = c.sign ? (v < 0 ? "neg" : v > 0 ? "pos" : "") : "";
+  if (c.key === "dereg_rank_30d" && DATA.network && v <= DATA.network.k_30) txt += ` <span class="badge crit">cull zone</span>`;
+  if (c.key === "name" && r.status === "pre_launch") txt += ' <span class="badge">pre-launch</span>';
+  return `<td class="${cls}">${txt}</td>`;
+}
+
+function pctRanks(rows, key) {
+  const vals = rows.map((r, i) => [r[key], i]).filter(([v]) => v != null).sort((a, b) => a[0] - b[0]);
+  const out = new Array(rows.length).fill(0.5);
+  const n = vals.length;
+  for (let i = 0; i < n;) {
+    let j = i; while (j + 1 < n && vals[j + 1][0] === vals[i][0]) j++;
+    const p = n > 1 ? ((i + j) / 2) / (n - 1) : 0.5;
+    for (let k = i; k <= j; k++) out[vals[k][1]] = p;
+    i = j + 1;
+  }
+  return out;
+}
+
+function rerank(rows) {
+  const active = Object.entries(WEIGHTS).filter(([, w]) => w);
+  rows.forEach((r) => (r.rank_wb = active.length ? 0 : null));
+  for (const [k, w] of active) { const p = pctRanks(rows, k); rows.forEach((r, i) => (r.rank_wb += w * p[i])); }
+}
+
+function render() {
+  if (!DATA) return;
+  const q = $("q").value.trim().toLowerCase(), pre = $("prelaunch").checked;
+  let rows = DATA.rows.filter((r) => (pre || r.status !== "pre_launch") &&
+    (!q || String(r.netuid) === q.replace(/^sn/, "") || (r.name || "").toLowerCase().includes(q)));
+  rerank(rows);
+  const { key, dir } = SORT;
+  rows.sort((a, b) => { const x = a[key], y = b[key]; if (x == null && y == null) return a.netuid - b.netuid;
+    if (x == null) return 1; if (y == null) return -1; return (x < y ? -1 : x > y ? 1 : 0) * dir; });
+  $("tbl").tHead.innerHTML = "<tr>" + COLS.map((c) =>
+    `<th data-k="${c.key}" title="${(DATA.factors.find((f) => f.key === c.key) || {}).desc || ""}">${c.label}${SORT.key === c.key ? (SORT.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>";
+  $("tbl").tBodies[0].innerHTML = rows.map((r) =>
+    `<tr data-n="${r.netuid}" class="${r.netuid === SEL ? "sel" : ""}">${COLS.map((c) => cell(r, c)).join("")}</tr>`).join("");
+  $("count").textContent = `${rows.length} subnets`;
+}
+
+$("tbl").addEventListener("click", (e) => {
+  const th = e.target.closest("th");
+  if (th) { const k = th.dataset.k; SORT = { key: k, dir: SORT.key === k ? -SORT.dir : (k === "name" || k === "netuid" ? 1 : -1) };
+            store.set("wb.sort", SORT); return render(); }
+  const tr = e.target.closest("tr[data-n]");
+  if (tr) { SEL = +tr.dataset.n; $("upnet").value = SEL; render(); loadChart(SEL); }
+});
+$("q").oninput = render; $("prelaunch").onchange = render;
+
+function sliders() {
+  $("sliders").innerHTML = DATA.factors.map((f) => {
+    const ic = IC[f.key]; const icTxt = ic == null ? "" : ` <span class="ic">IC ${ic.toFixed(3)}</span>`;
+    return `<div class="slider" title="${f.desc}"><span>${f.label}${icTxt}</span>
+      <input type="range" min="-1" max="1" step="0.1" value="${WEIGHTS[f.key] || 0}" data-k="${f.key}">
+      <span class="sec" id="w_${f.key}">${(WEIGHTS[f.key] || 0).toFixed(1)}</span></div>`;
+  }).join("");
+  $("sliders").querySelectorAll("input").forEach((el) => el.oninput = () => {
+    WEIGHTS[el.dataset.k] = +el.value; $("w_" + el.dataset.k).textContent = (+el.value).toFixed(1);
+    store.set("wb.weights", WEIGHTS); SORT = { key: "rank_wb", dir: -1 }; render();
+  });
+}
+
+async function loadPresets() {
+  const { presets } = await api("/api/v1/wb/presets");
+  $("presets").innerHTML = '<option value="">— presets —</option>' + presets.map((p) =>
+    `<option value="${encodeURIComponent(JSON.stringify(p.weights))}">${p.name}</option>`).join("");
+}
+$("presets").onchange = () => { const v = $("presets").value; if (!v) return;
+  WEIGHTS = JSON.parse(decodeURIComponent(v)); $("pname").value = $("presets").selectedOptions[0].text;
+  store.set("wb.weights", WEIGHTS); sliders(); SORT = { key: "rank_wb", dir: -1 }; render(); };
+$("psave").onclick = async () => {
+  const name = $("pname").value.trim(); if (!name) return alert("name the preset");
+  const weights = Object.fromEntries(Object.entries(WEIGHTS).filter(([, w]) => w));
+  try { await api("/api/v1/wb/presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, weights }) }); loadPresets(); }
+  catch (e) { alert("save failed: " + e.message); }
+};
+$("pdel").onclick = async () => { const name = $("pname").value.trim(); if (!name) return;
+  try { await api("/api/v1/wb/presets/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); loadPresets(); }
+  catch (e) { alert("delete failed: " + e.message); } };
+$("preset0").onclick = () => { WEIGHTS = {}; store.set("wb.weights", WEIGHTS); sliders(); render(); };
+
+function weather(n) {
+  if (!n) return $("weather").innerHTML = '<span class="muted">no dereg weather row yet (wb_dereg has not run)</span>';
+  const d = (x) => x == null ? "?" : x.toFixed(1);
+  $("weather").innerHTML = [
+    ["Pool (non-immune)", n.pool_size], ["Culls expected in 30 d (k₃₀)", n.k_30], ["Avg gap between registrations", d(n.reg_gap_mean_days) + " d"],
+    ["Next registration ≈", d(n.eta_next_registration_days) + " d"],
+    ["Lock cost", n.lock_cost_tau == null ? "?" : n.lock_cost_tau.toFixed(0) + " τ" + (n.lock_cost_decay_tau_per_day ? ` (−${n.lock_cost_decay_tau_per_day.toFixed(0)}/d)` : "")],
+    ["Immunity", (n.immunity_period_blocks / 7200).toFixed(0) + " d (" + n.immunity_source + ")"],
+    ["Graduating ≤ 30 d", n.graduates_30d]].map(([k, v]) => `<span class="sec">${k}: <b style="color:var(--text-primary)">${v}</b></span>`).join("");
+}
+
+async function loadScreener() {
+  try {
+    DATA = await api("/api/v1/wb/screener");
+  } catch (e) { $("asof").textContent = "screener failed: " + e.message; return; }
+  DATA.rows.forEach(derive);
+  const a = DATA.as_of, t = (x) => x ? new Date(x * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
+  $("asof").textContent = `as of 1h ${t(a["1h"])} · 1d ${t(a["1d"])} · dereg ${t(a.dereg)}`;
+  $("stale").style.display = DATA.stale ? "block" : "none";
+  weather(DATA.network);
+  sliders(); render();
+}
+
+async function loadResults() {
+  try {
+    const r = await api("/api/v1/wb/results");
+    const study = r.results.find((x) => x.summary);
+    if (study) { IC = Object.fromEntries(Object.entries(study.summary.ic).map(([k, v]) => [k, v["7"]])); IC.ema72_band_pos_1h = undefined;
+                 IC.mp_gap_to_cull_k_30d = study.summary.ic.mp_gap_to_cull_1?.["7"]; }
+    $("results").innerHTML = (r.results.length ? r.results.slice(0, 8).map((x) =>
+      `<div>${x.file} <span class="muted">${new Date(x.mtime * 1000).toISOString().slice(0, 10)}</span></div>`).join("") : "no results yet — run <code>python -m app.wb.study</code>") +
+      (r.legacy ? `<div style="margin-top:6px">legacy (old bot): ${r.legacy.files?.length ?? 0} files</div>` : "");
+    if (DATA) sliders();
+  } catch (e) { $("results").textContent = "results failed: " + e.message; }
+}
+
+// ── chart ──────────────────────────────────────────────────────────────────
+async function loadChart(n) {
+  const period = $("period").value, bars = $("bars").value;
+  let d;
+  try { d = await api(`/api/v1/wb/subnet/${n}/chart?period=${period}&bars=${bars}`); }
+  catch (e) { $("ctitle").textContent = "chart failed: " + e.message; return; }
+  $("ctitle").textContent = `SN${d.netuid} ${d.name || ""} · ${period}`;
+  const x = d.bars.map((b) => new Date((b.ts) * 1000));
+  const ov = d.overlay;
+  const c1 = css("--series-1"), c2 = css("--series-2"), c3 = css("--series-3");
+  const traces = [
+    { x, y: ov.map((o) => o.upper), mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
+    { x, y: ov.map((o) => o.lower), mode: "lines", line: { width: 0 }, fill: "tonexty", fillcolor: c2 + "26",
+      name: "EMA72 ±2σ band", hovertemplate: "band %{y:.4g}<extra></extra>" },
+    { x, y: ov.map((o) => o.ema), mode: "lines", line: { width: 2, color: c2 }, name: "EMA72", hovertemplate: "EMA72 %{y:.4g}<extra></extra>" },
+    { x, y: d.bars.map((b) => b.moving_price), mode: "lines", line: { width: 2, color: c3, dash: "dot" }, name: "chain moving price",
+      hovertemplate: "moving %{y:.4g}<extra></extra>" },
+    { x, y: d.bars.map((b) => b.close), mode: "lines", line: { width: 2, color: c1 }, name: "close", hovertemplate: "close %{y:.4g}<extra></extra>" },
+  ];
+  const shapes = [], ann = [];
+  const hline = (y, color, label, left) => { if (y == null || y <= 0) return;
+    shapes.push({ type: "line", xref: "paper", x0: 0, x1: 1, y0: y, y1: y, line: { color, width: 1.5, dash: "dash" } });
+    ann.push({ xref: "paper", x: left ? 0.01 : 0.99, y: $("logy").checked ? Math.log10(y) : y, xanchor: left ? "left" : "right",
+               yanchor: left ? "top" : "bottom", text: label, showarrow: false, bgcolor: css("--surface-1"),
+               font: { size: 11, color: css("--text-secondary") } }); };
+  hline(d.lines.cull_line_1?.value, css("--critical"), "cull line: lowest non-immune moving price", true);
+  const k = d.lines.cull_line_k_30d?.k;
+  hline(d.lines.cull_line_k_30d?.value, css("--serious"), `30-day cull line (k=${k ?? "?"})`, false);
+  if (d.warmup) ann.push({ xref: "paper", yref: "paper", x: 0.01, y: 1, xanchor: "left", yanchor: "top", showarrow: false,
+    text: "EMA72 still in warm-up (< 144 bars): the band is wide and seed-dominated", font: { size: 11, color: css("--text-secondary") } });
+  if (d.immunity_end && d.immunity_end * 1000 > x[0]?.getTime()) {
+    const xe = new Date(d.immunity_end * 1000);
+    shapes.push({ type: "line", yref: "paper", y0: 0, y1: 1, x0: xe, x1: xe, line: { color: css("--text-muted"), width: 1, dash: "dot" } });
+    ann.push({ yref: "paper", y: 1, x: xe, yanchor: "bottom", text: "immunity ends", showarrow: false, font: { size: 11, color: css("--text-secondary") } });
+  }
+  const axis = { gridcolor: css("--grid"), linecolor: css("--axis"), tickfont: { color: css("--text-muted") }, zeroline: false };
+  Plotly.react("chart", traces, {
+    paper_bgcolor: css("--surface-1"), plot_bgcolor: css("--surface-1"), font: { color: css("--text-primary"), size: 12 },
+    margin: { l: 56, r: 12, t: 24, b: 36 }, hovermode: "x unified", shapes, annotations: ann,
+    legend: { orientation: "h", y: 1.1, x: 0, font: { color: css("--text-secondary") } },
+    xaxis: { ...axis, type: "date" }, yaxis: { ...axis, type: $("logy").checked ? "log" : "linear", title: { text: "τ per α", font: { color: css("--text-muted") } } },
+  }, { displaylogo: false, responsive: true });
+  explain(n);
+  notes(n, d.events);
+}
+["period", "bars", "logy"].forEach((id) => $(id).onchange = () => SEL && loadChart(SEL));
+
+function explain(n) {
+  const r = DATA?.rows.find((x) => x.netuid === n); if (!r) return;
+  const keys = ["ema72_band_pos_1d", "ema72_band_pos_1h", "ema72_dist_1d", "ema72_dist_1h", "px_vs_moving", "dd_90d", "rv_30d",
+    "ema72_cross_days_1d", "dereg_rank", "dereg_rank_30d", "dereg_rank_90d", "mp_gap_to_cull_1", "mp_gap_to_cull_k_30d",
+    "dereg_safety_30d", "dereg_safety_90d", "hours_in_bottom_k_30d", "spot_rank", "spot_vs_mp", "days_to_cull_static",
+    "immunity_remaining_days", "repo_pushed_days", "commits_30d", "commits_90d", "owner_locked_share"];
+  const all = DATA.rows;
+  $("explain").innerHTML = "<tr><th>metric</th><th>value</th><th>percentile</th><th>status</th></tr>" + keys.map((k) => {
+    const v = r[k], cov = r.cov?.[k] || {};
+    const vals = all.map((x) => x[k]).filter((x) => x != null).sort((a, b) => a - b);
+    const p = v == null || !vals.length ? "" : Math.round(100 * vals.filter((x) => x <= v).length / vals.length) + "%";
+    return `<tr><td>${k}</td><td>${v == null ? "" : (+v).toPrecision(4)}</td><td>${p}</td><td class="muted">${cov.status || (v == null ? "—" : "")}${cov.reason ? " · " + cov.reason : ""}</td></tr>`;
+  }).join("");
+}
+
+async function notes(n, events) {
+  let html = "";
+  try {
+    const { notes } = await api(`/api/v1/wb/notes?netuid=${n}`);
+    html += notes.map((x) => `<div class="note"><b>${x.title || x.kind}</b> <span class="muted">${new Date(x.created_at * 1000).toISOString().slice(0, 16)} · ${x.created_by}</span><br>${x.body || ""}${x.payload?.status === "unreadable" ? ' <span class="badge">unreadable</span>' : ""}</div>`).join("");
+  } catch {}
+  html += (events || []).map((e) => `<div class="note"><span class="badge">${e.severity}</span> ${e.event_type} <span class="muted">${new Date(e.event_at * 1000).toISOString().slice(0, 16)}</span></div>`).join("");
+  $("notes").innerHTML = html || '<span class="muted">no notes or events</span>';
+}
+
+// ── upload ─────────────────────────────────────────────────────────────────
+$("upload").onclick = async () => {
+  const f = $("file").files[0]; if (!f) return alert("pick an image");
+  const net = $("upnet").value.trim();
+  $("upres").textContent = "uploading…";
+  try {
+    const r = await api(`/api/v1/wb/chart-read${net ? "?netuid=" + encodeURIComponent(net) : ""}`, { method: "POST", headers: { "Content-Type": f.type }, body: f });
+    const rd = r.read || {};
+    $("upres").innerHTML = `<b>${r.status}</b> · ${r.model} · $${(r.cost_usd || 0).toFixed(3)}<br>${rd.summary || r.reason || ""}<br>` +
+      `<span class="muted">trend ${rd.trend ?? "?"} · drawdown ${rd.drawdown_from_visible_high_pct ?? "?"}% · support −${rd.support_pct_below ?? "?"}% · resistance +${rd.resistance_pct_above ?? "?"}% (advisory; compare with the chart below)</span>`;
+    if (SEL) notes(SEL, []);
+  } catch (e) {
+    const m = { vision_disabled: "stored — vision is off (set ANTHROPIC_API_KEY and WB_VISION_ENABLED=true)", paused: "stored — LLM spend is paused / kill switch",
+                budget: "stored — LLM budget denied" }[e.message] || e.message;
+    $("upres").textContent = `${e.status}: ${m}`;
+  }
+};
+
+WEIGHTS = store.get("wb.weights", {});
+loadScreener().then(loadResults); loadPresets().catch(() => {});
+setInterval(loadScreener, 5 * 60 * 1000);
+</script>
+</body>
+</html>
