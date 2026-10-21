@@ -87,7 +87,7 @@ def _spec_inventory() -> set[str]:
 
 def test_inventory_equals_spec():
     inv = _spec_inventory()
-    assert len(inv) == 655
+    assert len(inv) == 658
     fields = set(Settings.model_fields) | {"SCORING_SPEC_VERSION"}
     assert inv == fields
 
@@ -127,3 +127,11 @@ def test_env_example_roundtrips_defaults():
              and k not in {"HEALTH_PORT", "DB_PATH", "JSONL_DIR", "DB_BACKUP_DIR", "SYSTEMD_WATCHDOG_ENABLED",
                            "STARTUP_PRIME_ENABLED", "DB_BACKUP_STARTUP_DELAY_SEC"} and not k.endswith("_ENABLED")]
     assert diffs == []
+
+
+def test_terminal_url_must_be_loopback():
+    from pydantic import ValidationError
+    assert Settings(_env_file=None, TERMINAL_API_URL="http://localhost:8787").TERMINAL_API_URL
+    assert Settings(_env_file=None, TERMINAL_API_URL="").TERMINAL_API_URL == ""
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, TERMINAL_API_URL="https://example.com:8787")

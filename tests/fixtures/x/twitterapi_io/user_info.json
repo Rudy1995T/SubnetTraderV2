@@ -1,0 +1,18 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "status": "success",
+ "msg": "success",
+ "data": {
+  "type": "user",
+  "userName": "chutes_ai",
+  "id": "1700000000000000001",
+  "name": "Chutes",
+  "isBlueVerified": true,
+  "followers": 25400,
+  "following": 310,
+  "statusesCount": 1830,
+  "createdAt": "Wed Nov 15 10:00:00 +0000 2023",
+  "unavailable": false
+ }
+}

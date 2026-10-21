@@ -1,0 +1,39 @@
+{
+ "type": 0,
+ "code": "fwjBwxUcdX",
+ "inviter": {
+  "id": "887105013183283221",
+  "username": "someone",
+  "avatar": "abc",
+  "global_name": "Some One"
+ },
+ "expires_at": null,
+ "flags": null,
+ "guild": {
+  "id": "1039241590092353596",
+  "name": "Nodexo",
+  "features": [
+   "NEWS",
+   "COMMUNITY"
+  ],
+  "verification_level": 1,
+  "vanity_url_code": null,
+  "nsfw_level": 0,
+  "premium_subscription_count": 0,
+  "premium_tier": 0
+ },
+ "guild_id": "1039241590092353596",
+ "channel": {
+  "id": "1052226281472794735",
+  "type": 5,
+  "name": "📢︱announcements"
+ },
+ "approximate_member_count": 1986,
+ "approximate_presence_count": 142,
+ "profile": {
+  "id": "1039241590092353596",
+  "member_count": 1986,
+  "online_count": 142,
+  "visibility": 1
+ }
+}

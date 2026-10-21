@@ -1,0 +1,16 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "data": {
+  "id": "1700000000000000001",
+  "username": "chutes_ai",
+  "name": "Chutes",
+  "created_at": "2023-11-15T10:00:00.000Z",
+  "verified": false,
+  "public_metrics": {
+   "followers_count": 25400,
+   "following_count": 310,
+   "tweet_count": 1830
+  }
+ }
+}

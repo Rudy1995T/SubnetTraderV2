@@ -1,0 +1,17 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "errors": [
+  {
+   "parameters": {
+    "since_id": [
+     "1"
+    ]
+   },
+   "message": "Invalid 'since_id':'1'. 'since_id' must be a tweet id created after 2026-10-10T12:00Z."
+  }
+ ],
+ "title": "Invalid Request",
+ "detail": "One or more parameters to your request was invalid.",
+ "type": "https://api.twitter.com/2/problems/invalid-request"
+}

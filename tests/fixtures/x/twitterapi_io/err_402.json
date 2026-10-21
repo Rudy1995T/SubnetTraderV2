@@ -1,0 +1,6 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "status": "error",
+ "msg": "Insufficient credits, please recharge"
+}

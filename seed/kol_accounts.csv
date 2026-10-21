@@ -1,0 +1,38 @@
+handle,display_name,category,credibility,verified,team_occupant_netuids,notes
+opentensor,OpenTensor Foundation,official,0.90,1,,protocol foundation
+bittensor_,Bittensor,official,0.90,1,,protocol account
+taostats,Taostats,explorer,0.85,1,,canonical explorer
+learnbittensor,Learn Bittensor,official,0.80,1,,docs
+const_reborn,Jacob Steeves (Const),founder,0.85,1,120,ex-OTF CEO; builds Affine SN120 — own-subnet posts excluded from KOL coverage
+mogmachine,mogmachine,founder,0.75,1,,Taostats founder
+MacrocosmosAI,Macrocosmos,founder,0.70,1,"1,9,13",multi-subnet operator (SN25/SN37 re-registered as UR/Aurelius; checked 2026-10-18)
+manifoldlabs,Manifold Labs,founder,0.70,1,4,Targon
+taoshiio,Taoshi,founder,0.60,1,8,legacy SN8 operator; SN8 now Vanta — verify mapping
+webuildscore,Score,founder,0.60,1,44,
+_redteam_,RedTeam,founder,0.60,1,61,
+CrucibleLabs,Crucible Labs,founder,0.55,1,,subnet mapping unknown → operator
+QuasarModels,Quasar,founder,0.30,1,24,"2026-07-31 SOTA claim, audited days later as 98 % inherited weights (early Aug 2026); low credibility by design"
+YumaGroup,Yuma (DCG),fund,0.75,1,,validator + fund; conflicted but informed
+DCGco,Digital Currency Group,fund,0.60,1,,
+BarrySilbert,Barry Silbert,fund,0.60,1,,
+xtaohq,xTAO,fund,0.65,1,,treasury co
+latentholdings,Latent Holdings,fund,0.70,1,,"owns tao.app, Latent 11"
+gtaoventures,GTAO Ventures,fund,0.55,1,,
+TrustedStake,TrustedStake,community,0.55,1,,validator
+0xSammy,0xSammy,analyst,0.80,1,,TAO Institute; 89k followers
+KeithSingery,Keith Singery,analyst,0.75,1,,Bittensor Guru podcast; validator
+here4impact,Michael D. White,analyst,0.60,1,,
+CryptoZPunisher,CryptoZPunisher,analyst,0.55,1,,
+bittingthembits,Andy ττ,analyst,0.60,1,,resource list maintainer
+tzedonn,tzedonn,analyst,0.55,1,,
+taomedia_,tao.media,media,0.65,1,,ecosystem outlet
+BSCNews,BSC News,media,0.40,1,,general crypto media; PR-heavy
+TAOCommunityHub,TAO Community Hub,community,0.50,1,,
+TAOFlows,TAO Flows,community,0.50,1,,
+proofoftalk,Proof of Talk,media,0.35,1,,"conference account; verified per research §4, not in the brief's core list"
+JesusMartinez,(unknown),analyst,0.35,1,,listed verified in research §4 but role unclear → operator to confirm before raising credibility
+yuma_ai,Yuma (alt),fund,0.00,0,,UNVERIFIED handle; may duplicate YumaGroup
+taoapp_,tao.app,explorer,0.00,0,,UNVERIFIED handle
+markjeffrey,Mark Jeffrey (Stillcore),analyst,0.00,0,,UNVERIFIED handle
+TaoPortal,TaoPortal,community,0.00,0,,UNVERIFIED handle
+jaltucher,James Altucher,analyst,0.00,0,,UNVERIFIED handle (BlueTAO.ai)

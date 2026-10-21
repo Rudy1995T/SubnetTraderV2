@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 import app.config as app_config
 from app import control
+from app.api.errors import origin_guard
 from app.api_auth import require_auth
 from app.logging.logger import logger
 from app.util.time import now_ts
@@ -135,7 +136,7 @@ async def list_presets() -> dict:
                          "weights": json.loads(r["weights_json"])} for r in rows]}
 
 
-@router.post("/api/v1/wb/presets", dependencies=[Depends(require_auth)])
+@router.post("/api/v1/wb/presets", dependencies=[Depends(require_auth), Depends(origin_guard)])
 async def save_preset(body: PresetBody) -> dict:
     known = {f["key"] for f in scr.FACTORS}
     bad = sorted(set(body.weights) - known)
@@ -151,7 +152,7 @@ async def save_preset(body: PresetBody) -> dict:
     return {"ok": True, "name": body.name}
 
 
-@router.post("/api/v1/wb/presets/delete", dependencies=[Depends(require_auth)])
+@router.post("/api/v1/wb/presets/delete", dependencies=[Depends(require_auth), Depends(origin_guard)])
 async def delete_preset(body: PresetName) -> dict:
     res = await _rt().db.execute("DELETE FROM wb_presets WHERE name = ?", (body.name,))
     if res.rowcount == 0:
@@ -174,7 +175,7 @@ async def _read_body(request: Request, cap: int) -> bytes:
     return bytes(buf)
 
 
-@router.post("/api/v1/wb/chart-read", dependencies=[Depends(require_auth)])
+@router.post("/api/v1/wb/chart-read", dependencies=[Depends(require_auth), Depends(origin_guard)])
 async def chart_read(request: Request, netuid: int | None = None) -> dict:
     rt = _rt()
     db = rt.db

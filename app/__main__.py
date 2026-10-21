@@ -39,10 +39,16 @@ async def _check(verbose: bool) -> int:
         print(f"quick_check={'ok' if qc_lines == ['ok'] else qc_lines[:5]}")
         n_tasks = sum(1 for sp in JOB_TABLE if sp.kind == "longtask")
         avail = len(rt.jobs) + len(rt.tasks)
-        max_phase = max((sp.phase for sp in JOB_TABLE if sp.id in rt.jobs or sp.id in rt.tasks), default=0)
+        # built phase = the highest P with an available job in every phase 0..P; jobs above it were built early
+        have = {sp.phase for sp in JOB_TABLE if sp.id in rt.jobs or sp.id in rt.tasks}
+        max_phase = 0
+        while max_phase + 1 in have:
+            max_phase += 1
+        early = sorted(sp.id for sp in JOB_TABLE if sp.phase > max_phase and (sp.id in rt.jobs or sp.id in rt.tasks))
         ok = qc_lines == ["ok"]
         print(f"{'OK' if ok else 'FAIL'} jobs={len(JOB_TABLE)} declared ({len(JOB_TABLE) - n_tasks} jobs + {n_tasks} "
-              f"LongTasks), {avail} available (phase {max_phase}), {len(rt.unavailable)} unavailable")
+              f"LongTasks), {avail} available (phase {max_phase}{' + early ' + ','.join(early) if early else ''}), "
+              f"{len(rt.unavailable)} unavailable")
         return 0 if ok else 1
     finally:
         if rt.http is not None:

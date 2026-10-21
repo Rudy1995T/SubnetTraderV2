@@ -331,6 +331,7 @@ class JobSpec:
     liveness_max_age_sec: int | None = None  # owner-declared value wins (E4); None → formula (§2.8)
     fail_alert_threshold: int | None = None  # per-job collector_failing threshold (≥ 1); None → JOB_FAIL_ALERT_THRESHOLD (5)
     fail_alert_key: str | None = None        # Settings key holding it (13's QUANT_ALERT_AFTER_FAILURES); wins when set
+    timeout_key: str | None = None           # Settings key overriding timeout_sec at run time (13's QUANT_WEEKLY_JOB_TIMEOUT_S)
 
 # trigger helpers (all timezone=UTC; the Settings key is read when setup_scheduler runs)
 def every(key: str, unit: Literal["sec", "min", "hour"]) -> TriggerFn            # IntervalTrigger(**{unit: s[key]})
@@ -654,7 +655,8 @@ def get_http() -> Http                       # the runtime's instance, else a la
 3. Status in `ok_statuses` → returned immediately, never retried (G1; e.g. 08 lists 429, 09 lists 400/402).
 4. 429 → `penalize_host(Retry-After or 60 s)` then retry; 5xx, timeouts and connect errors → backoff 1 s, 4 s, 16 s … then retry; at most `retries` (default `HTTP_MAX_RETRIES` = 2) retries, then `raise ProviderError(...) from last_exc` (transport error or `httpx.HTTPStatusError`).
 5. Every other status (404, 403, 401, 3xx, 304, 202, other 4xx) is returned unchanged and never retried within the call — the GitHub resolver, Discord probes and TMC 404 handling depend on seeing them.
-6. **Body cap:** the body is streamed and cut at `max_body_bytes` (default `HTTP_MAX_BODY_BYTES` = 5 MiB; 07 passes `WEB_MAX_BODY_BYTES`); a cut response carries `response.extensions["truncated"] = True` and is logged `http_body_truncated`; `response.content` holds the first `max_body_bytes` bytes.
+6. **Body cap:** the body is streamed and cut at `max_body_bytes` (default `HTTP_MAX_BODY_BYTES` = 5 MiB; 07 passes `WEB_MAX_BODY_BYTES`); a cut response carries `response.extensions["truncated"] = True` and is logged `http_body_truncated`; `response.content` holds the first `max_body_bytes` bytes. Every response also carries `extensions["elapsed_ms"]` (send → body read, limiter wait excluded; 07's `latency_ms`).
+9. **Multi-host providers** (`MULTI_HOST_PROVIDERS` = {`web`}, 07 §2.1): a `Retry-After` stays a per-host cooldown capped at 3,600 s, `x-ratelimit-*` headers never penalise the whole bucket, and `limiter.host_cooldown(provider, host)` lets the caller skip a cooling host instead of sleeping on it.
 7. Logging: `provider, method, host, path, status, ms, attempt` only — never the query string, headers or bodies; a path segment of the form `bot<token>` is logged as `bot***`.
 8. `BudgetExhausted` propagates to the job (§2.6 step 8). Calls that cannot use `httpx` (08's discord.py websocket, the Anthropic SDK, 05's websocket RPC) call `await rt.limiter.acquire(p)` + `rt.limiter.count(p)` themselves and book requests with `costs.record(p, 0.0, requests=n)` (G5).
 
@@ -1094,9 +1096,10 @@ All keys live on the single `Settings` class and are read dynamically (`import a
 | `LLM_ENABLED` | bool | `false` |  |
 | `ANTHROPIC_API_KEY` | str | `""` |  |
 | `LLM_MONTHLY_CAP_USD` | float | `60` | F2: 60; ≥ 0, 0 = LLM disabled |
-| `LLM_BULK_MODEL` | str | `claude-haiku-4-5-20251001` |  |
-| `LLM_ESCALATION_MODEL` | str | `claude-sonnet-5` |  |
-| `LLM_NARRATIVE_MODEL` | str | `claude-opus-5` |  |
+| `LLM_BULK_MODEL` | str | `claude-haiku-5-5` | 10 §2.3 (re-verified 2026-10-18) |
+| `LLM_ESCALATION_MODEL` | str | `claude-sonnet-5-5` |  |
+| `LLM_NARRATIVE_MODEL` | str | `claude-opus-5-5` |  |
+| `LLM_REFUSAL_FALLBACK` | bool | `true` | 10 §2.3: Sonnet/Opus calls use `fallbacks="default"` |
 | `LLM_SCHEMA_V` | int | `1` |  |
 | `LLM_RUBRIC_PATH` | str | `app/nlp/prompts/classify_v1.md` |  |
 | `LLM_BATCH_INTERVAL_MIN` | int | `360` |  |
@@ -1231,6 +1234,7 @@ All keys live on the single `Settings` class and are read dynamically (`import a
 | `QUANT_LOOKBACK_BARS` | int | `6` |  |
 | `QUANT_MIN_DEPTH_TAO` | float | `3000.0` |  |
 | `QUANT_MIN_NAMES` | int | `10` |  |
+| `QUANT_MIN_IC_DATES` | int | `10` |  |
 | `QUANT_CONTROLS` | str | `size,emission_share` |  |
 | `QUANT_TRADE_TAO` | float | `2.0` |  |
 | `QUANT_FEE_RATE` | float | `0.003` |  |
@@ -1277,6 +1281,7 @@ All keys live on the single `Settings` class and are read dynamically (`import a
 | `TELEGRAM_POLL_TIMEOUT_SEC` | int | `20` |  |
 | `TELEGRAM_MAX_MSG_PER_MIN` | int | `20` |  |
 | `TELEGRAM_CONFIRM_TTL_SEC` | int | `300` |  |
+| `TERMINAL_API_URL` | str | `"http://127.0.0.1:8787"` | 14 §8.4a; http(s) loopback URL or empty (= `/wallet` off) |
 | `ALERTS_ENABLED` | bool | `True` |  |
 | `ALERT_DISPATCH_INTERVAL_SEC` | int | `60` |  |
 | `ALERT_MIN_SEVERITY` | str | `"info"` |  |
@@ -1740,3 +1745,4 @@ Phase 0 is done when every line above matches and `pytest -q` is green. The "hel
   - B7: 01's own DDL removed (03 owns every table; INTEGER times). Lifecycle: 16 `pre_init` first, READY before any job/alert, bounded shutdown (1+1+5+3 s ≤ 10 s deadline), `capture_signals` override, `task_handles["health"]`, self-probe, `last_attempt`.
   - Deps: `discord.py>=2.4,<3`; `[backfill]` extra (`async-substrate-interface`, `xxhash`); no bittensor/bittensor-wallet/substrate-interface (tested with and without the extra); 05's `SUBTENSOR_RPC_MODE=sdk` rejected.
   - Review: 14 old-bot line refs re-verified; fixed `run_health_server` sub-ranges, signal-handler/READY lines, `_health_alerted` range (1099-1146), main/entrypoint 3385-3486, telegram class ranges; package findings applied except those contradicting the ledger (see coordinator report).
+- 2026-10-20: §5 inventory + `TERMINAL_API_URL` (owner 14 §8.4a, loopback-only τ Terminal read API for the Telegram `/wallet` view); 658 keys.

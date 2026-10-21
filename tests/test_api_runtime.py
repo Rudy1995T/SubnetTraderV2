@@ -14,7 +14,7 @@ import respx
 
 import app.config as app_config
 from app.jobs import JOB_TABLE, JobRegistry, setup_scheduler
-from tests.conftest import BUILT_PHASE, EXPECTED_AVAILABLE
+from tests.conftest import BUILT_PHASE, EARLY_JOBS, EXPECTED_AVAILABLE
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -104,9 +104,7 @@ async def test_control_routes(rt, app_client, settings_override, tmp_root):
         await asyncio.sleep(0.2)
         n = await rt.db.fetchval("SELECT COUNT(*) FROM collector_runs WHERE job='log_retention_daily'", writer=True)
         assert n == 1
-        from app.jobs import JOB_TABLE
-        from tests.conftest import BUILT_PHASE
-        unbuilt = next(sp.id for sp in JOB_TABLE if sp.phase > BUILT_PHASE and sp.kind != "longtask")
+        unbuilt = sorted(rt.unavailable)[0]          # a declared row whose module is not built (17's backfill_github)
         assert (await app_client.post(f"/api/v1/control/run/{unbuilt}", headers=H)).status_code == 404  # not built
         r = await app_client.post("/api/v1/control/run/registry_occupants", headers=H)                      # disabled
         assert r.status_code == 409 and r.json()["detail"] == "disabled"
@@ -167,8 +165,9 @@ def test_cli(tmp_path):
     r = _cli(tmp_path, "check")
     assert r.returncode == 0, r.stderr
     assert f"schema_version={CODE_SCHEMA_VERSION}" in r.stdout and "sqlite_version=" in r.stdout
-    assert (f"OK jobs=57 declared (54 jobs + 3 LongTasks), {EXPECTED_AVAILABLE} available (phase {BUILT_PHASE}), "
-            f"{57 - EXPECTED_AVAILABLE} unavailable") in r.stdout
+    early = f" + early {','.join(sorted(EARLY_JOBS))}" if EARLY_JOBS else ""
+    assert (f"OK jobs=57 declared (54 jobs + 3 LongTasks), {EXPECTED_AVAILABLE} available (phase {BUILT_PHASE}"
+            f"{early}), {57 - EXPECTED_AVAILABLE} unavailable") in r.stdout
     r = _cli(tmp_path, "jobs")
     assert r.returncode == 0 and len([l for l in r.stdout.splitlines()[1:] if l.strip()]) == 57
     r = _cli(tmp_path, "run-job", "log_retention_daily")

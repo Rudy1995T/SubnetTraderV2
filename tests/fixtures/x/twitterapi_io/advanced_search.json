@@ -1,0 +1,112 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "status": "success",
+ "msg": "",
+ "tweets": [
+  {
+   "type": "tweet",
+   "id": "2111411901035446322",
+   "url": "",
+   "text": "Chutes on bittensor is the top subnet by usage, SN64 ftw",
+   "retweetCount": 40,
+   "replyCount": 1,
+   "likeCount": 300,
+   "quoteCount": 0,
+   "viewCount": 900,
+   "createdAt": "Sat Oct 17 11:00:00 +0000 2026",
+   "lang": "en",
+   "isReply": false,
+   "inReplyToId": null,
+   "author": {
+    "type": "user",
+    "userName": "0xSammy",
+    "id": "1500000000000000042",
+    "name": "0xSammy",
+    "isBlueVerified": true,
+    "followers": 89000,
+    "following": 900,
+    "statusesCount": 20000,
+    "createdAt": "Mon Jan 04 10:00:00 +0000 2021"
+   },
+   "entities": {
+    "urls": [],
+    "hashtags": [],
+    "user_mentions": []
+   },
+   "extendedEntities": {},
+   "quoted_tweet": null,
+   "retweeted_tweet": null
+  },
+  {
+   "type": "tweet",
+   "id": "2111396801541046323",
+   "url": "",
+   "text": "GIVEAWAY: RT to win $SN64 airdrop 🚀🚀🚀",
+   "retweetCount": 0,
+   "replyCount": 1,
+   "likeCount": 1,
+   "quoteCount": 0,
+   "viewCount": 900,
+   "createdAt": "Sat Oct 17 10:00:00 +0000 2026",
+   "lang": "en",
+   "isReply": false,
+   "inReplyToId": null,
+   "author": {
+    "type": "user",
+    "userName": "taomoon12345",
+    "id": "1800000000000000777",
+    "name": "TAO moon",
+    "isBlueVerified": false,
+    "followers": 12,
+    "following": 2400,
+    "statusesCount": 9000,
+    "createdAt": "Wed Oct 07 12:00:00 +0000 2026"
+   },
+   "entities": {
+    "urls": [],
+    "hashtags": [],
+    "user_mentions": []
+   },
+   "extendedEntities": {},
+   "quoted_tweet": null,
+   "retweeted_tweet": null
+  },
+  {
+   "type": "tweet",
+   "id": "2111381702046646324",
+   "url": "",
+   "text": "@chutes_ai what is the latency of subnet 64?",
+   "retweetCount": 2,
+   "replyCount": 1,
+   "likeCount": 10,
+   "quoteCount": 0,
+   "viewCount": 900,
+   "createdAt": "Sat Oct 17 09:00:00 +0000 2026",
+   "lang": "en",
+   "isReply": true,
+   "inReplyToId": "2111366602552246273",
+   "author": {
+    "type": "user",
+    "userName": "0xSammy",
+    "id": "1500000000000000042",
+    "name": "0xSammy",
+    "isBlueVerified": true,
+    "followers": 89000,
+    "following": 900,
+    "statusesCount": 20000,
+    "createdAt": "Mon Jan 04 10:00:00 +0000 2021"
+   },
+   "entities": {
+    "urls": [],
+    "hashtags": [],
+    "user_mentions": []
+   },
+   "extendedEntities": {},
+   "quoted_tweet": null,
+   "retweeted_tweet": null
+  }
+ ],
+ "has_next_page": false,
+ "next_cursor": ""
+}

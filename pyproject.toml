@@ -19,6 +19,8 @@ dependencies = [
   "python-dateutil>=2.9,<3.0",
   "discord.py>=2.4,<3",            # 08 discord_gateway (Phase 6); imported lazily by that module only
   "xxhash>=3.4",                   # 04 twox128 storage-key prefix (SubnetIdentitiesV3)
+  "cryptography>=42,<47",          # 07 TLS certificate parsing (not_valid_after_utc)
+  "tld>=0.13,<1.0",                # 07 registrable domain (offline PSL; already pulled in by trafilatura → courlan)
 ]
 
 [project.optional-dependencies]

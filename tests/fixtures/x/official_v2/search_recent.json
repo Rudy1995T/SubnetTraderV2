@@ -1,0 +1,42 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "data": [
+  {
+   "id": "2111411901035446282",
+   "text": "Chutes on bittensor keeps shipping, SN64",
+   "created_at": "2026-10-17T11:00:00.000Z",
+   "lang": "en",
+   "author_id": "1500000000000000042",
+   "conversation_id": "2111411901035446282",
+   "public_metrics": {
+    "retweet_count": 3,
+    "reply_count": 1,
+    "like_count": 12,
+    "quote_count": 1,
+    "impression_count": 1500
+   }
+  }
+ ],
+ "includes": {
+  "users": [
+   {
+    "id": "1500000000000000042",
+    "username": "0xSammy",
+    "name": "0xSammy",
+    "created_at": "2021-01-04T10:00:00.000Z",
+    "verified": true,
+    "public_metrics": {
+     "followers_count": 89000,
+     "following_count": 900,
+     "tweet_count": 20000
+    }
+   }
+  ]
+ },
+ "meta": {
+  "newest_id": "2111411901035446282",
+  "oldest_id": "2111411901035446282",
+  "result_count": 1
+ }
+}

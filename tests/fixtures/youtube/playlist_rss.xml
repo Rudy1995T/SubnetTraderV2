@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?playlist_id=PLN0WJc6io8zqEknIutfyEjiJViazrxrzU"/>
+ <id>yt:playlist:PLN0WJc6io8zqEknIutfyEjiJViazrxrzU</id>
+ <yt:playlistId>PLN0WJc6io8zqEknIutfyEjiJViazrxrzU</yt:playlistId>
+ <yt:channelId>UCq-UgxLUK1mYJBxrmOfP7aA</yt:channelId>
+ <title>Bittensor: Novelty Search Podcast</title>
+ <author>
+  <name>The Opentensor Foundation | Bittensor TAO</name>
+  <uri>https://www.youtube.com/channel/UCq-UgxLUK1mYJBxrmOfP7aA</uri>
+ </author>
+ <published>2024-04-02T16:57:24+00:00</published>
+ <entry>
+  <id>yt:video:JfFWZF1GSn4</id>
+  <yt:videoId>JfFWZF1GSn4</yt:videoId>
+  <yt:channelId>UCq-UgxLUK1mYJBxrmOfP7aA</yt:channelId>
+  <title>Bittensor’s eTao &amp; Gamma + SN4 Targon Revenue, Buybacks &amp; Roadmap</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=JfFWZF1GSn4"/>
+  <author>
+   <name>The Opentensor Foundation | Bittensor TAO</name>
+   <uri>https://www.youtube.com/channel/UCq-UgxLUK1mYJBxrmOfP7aA</uri>
+  </author>
+  <published>2026-10-16T05:04:24+00:00</published>
+  <updated>2026-10-16T10:19:38+00:00</updated>
+  <media:group>
+   <media:title>Bittensor’s eTao &amp; Gamma + SN4 Targon Revenue, Buybacks &amp; Roadmap</media:title>
+   <media:content url="https://www.youtube.com/v/JfFWZF1GSn4?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/JfFWZF1GSn4/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Bittensor’s protocol is evolving—and Targon is opening up about its business.
+
+In Novelty Search #92, Const joins Rob and Matt from Targon in Austin, alongside Mark Jeffrey and Mogmachine, to explore eTAO, Gamma and greater flexibility for subnet economics.
+
+The conversation covers proposed changes </media:description>
+   <media:community>
+    <media:starRating count="19" average="5.00" min="1" max="5"/>
+    <media:statistics views="678"/>
+   </media:community>
+  </media:group>
+ </entry><entry>
+  <id>yt:video:bpJK99kV5so</id>
+  <yt:videoId>bpJK99kV5so</yt:videoId>
+  <yt:channelId>UCq-UgxLUK1mYJBxrmOfP7aA</yt:channelId>
+  <title>Pareton: Making AI Inference 54% Faster</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=bpJK99kV5so"/>
+  <author>
+   <name>The Opentensor Foundation | Bittensor TAO</name>
+   <uri>https://www.youtube.com/channel/UCq-UgxLUK1mYJBxrmOfP7aA</uri>
+  </author>
+  <published>2026-10-09T04:54:09+00:00</published>
+  <updated>2026-10-09T06:34:19+00:00</updated>
+  <media:group>
+   <media:title>Pareton: Making AI Inference 54% Faster</media:title>
+   <media:content url="https://www.youtube.com/v/bpJK99kV5so?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/bpJK99kV5so/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Pareton (SN10) is building a continuous optimization layer for AI inference on Bittensor, using open competition to discover, benchmark, and deploy improvements to inference engines.
+
+As AI models converge in capability, inference cost, throughput, and latency become increasingly important. Pareton </media:description>
+   <media:community>
+    <media:starRating count="18" average="5.00" min="1" max="5"/>
+    <media:statistics views="825"/>
+   </media:community>
+  </media:group>
+ </entry><entry>
+  <id>yt:video:WpQ0_zSZceA</id>
+  <yt:videoId>WpQ0_zSZceA</yt:videoId>
+  <yt:channelId>UCq-UgxLUK1mYJBxrmOfP7aA</yt:channelId>
+  <title>The Data Problem Holding Back Humanoid Robots | OpenRoboto</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=WpQ0_zSZceA"/>
+  <author>
+   <name>The Opentensor Foundation | Bittensor TAO</name>
+   <uri>https://www.youtube.com/channel/UCq-UgxLUK1mYJBxrmOfP7aA</uri>
+  </author>
+  <published>2026-10-02T09:18:19+00:00</published>
+  <updated>2026-10-02T11:24:28+00:00</updated>
+  <media:group>
+   <media:title>The Data Problem Holding Back Humanoid Robots | OpenRoboto</media:title>
+   <media:content url="https://www.youtube.com/v/WpQ0_zSZceA?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/WpQ0_zSZceA/hqdefault.jpg" width="480" height="360"/>
+   <media:description>OpenRoboto is building an open competition for robot intelligence on Bittensor.
+
+Robot hardware has advanced rapidly, but capable general-purpose robot models remain a major constraint. OpenRoboto gives miners shared base models and training data, evaluates their improvements, and promotes the stron</media:description>
+   <media:community>
+    <media:starRating count="33" average="5.00" min="1" max="5"/>
+    <media:statistics views="1494"/>
+   </media:community>
+  </media:group>
+ </entry><entry>
+  <id>yt:video:YJkzjES67ro</id>
+  <yt:videoId>YJkzjES67ro</yt:videoId>
+  <yt:channelId>UCq-UgxLUK1mYJBxrmOfP7aA</yt:channelId>
+  <title>How SOMA Cuts AI Agent Costs by Compressing Context :: Bittensor SN114</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=YJkzjES67ro"/>
+  <author>
+   <name>The Opentensor Foundation | Bittensor TAO</name>
+   <uri>https://www.youtube.com/channel/UCq-UgxLUK1mYJBxrmOfP7aA</uri>
+  </author>
+  <published>2026-09-25T20:47:33+00:00</published>
+  <updated>2026-09-30T21:22:06+00:00</updated>
+  <media:group>
+   <media:title>How SOMA Cuts AI Agent Costs by Compressing Context :: Bittensor SN114</media:title>
+   <media:content url="https://www.youtube.com/v/YJkzjES67ro?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/YJkzjES67ro/hqdefault.jpg" width="480" height="360"/>
+   <media:description>SOMA, Bittensor Subnet 114, is building a context-compression layer designed to make AI agents cheaper to run without sacrificing their ability to complete tasks.
+In Novelty Search 089, the Dendrite team explains how years of mining and building across Bittensor led them to SOMA, after seeing first-</media:description>
+   <media:community>
+    <media:starRating count="11" average="5.00" min="1" max="5"/>
+    <media:statistics views="1230"/>
+   </media:community>
+  </media:group>
+ </entry></feed>

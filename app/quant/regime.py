@@ -234,3 +234,52 @@ def compute_regime_metrics(
         "n_subnets": n_subnets,
         "thin_universe": False,
     }
+
+
+# ── live per-slot classification (spec 12 §2.7; Phase 8) ────────────────────────────────────────────────────
+_REGIME_SQL = ("SELECT netuid, hour_ts, price FROM chain_hourly WHERE hour_ts > ? AND hour_ts <= ? AND netuid <> 0 "
+               "AND is_active = 1 AND price > 0 AND (observed_at <= ? OR (? = 1 AND backfilled = 1)) "
+               "ORDER BY netuid, hour_ts")
+
+
+async def _net_point(db, col: str, t: int, cutoff: int) -> float | None:
+    v = await db.fetchval(f"SELECT {col} FROM chain_network_hourly WHERE hour_ts > ? AND hour_ts <= ? "
+                          f"AND observed_at <= ? AND {col} > 0 ORDER BY hour_ts DESC LIMIT 1", (t - 3600, t, cutoff))
+    return None if v is None else float(v)
+
+
+async def _diagnostics(db, slot: int, cutoff: int) -> dict:
+    out: dict = {}
+    for name, col in (("tao_usd_ret_24h", "tao_usd"), ("sum_prices_ret_24h", "sum_subnet_prices")):
+        a, b = await _net_point(db, col, slot - 86400, cutoff), await _net_point(db, col, slot, cutoff)
+        out[name] = math.log(b / a) if (a and b) else None
+    return out
+
+
+async def regime_for_slot(db, slot: int, cutoff: int, mode: str, params: RegimeParams,
+                          v_w_by_regime: Mapping[str, float], *, spec_version: str | None = None,
+                          official: bool = False) -> RegimeResult:
+    """Regime at ``slot`` from the 24 h of ``chain_hourly`` prices admitted by ``cutoff`` (spec 12 §2.7 steps 1–4).
+
+    Step 3a: an official slot reuses an existing ``regime_daily(day_ts=slot, spec_version)`` row (17's backfill, or
+    an earlier run) — ``v_w`` is re-derived from ``v_w_by_regime`` so the stored row and ``scores.regime`` agree."""
+    if official and spec_version:
+        row = await db.fetchone("SELECT * FROM regime_daily WHERE day_ts = ? AND spec_version = ?",
+                                (int(slot), spec_version))
+        if row is not None:
+            label = str(row["label"]).upper()
+            metrics = {"vol_24h": row["vol_24h"], "directional_strength": row["directional_strength"],
+                       "dispersion": row["dispersion"], "raw_regime": row["raw_regime"] or label,
+                       "n_subnets": row["n_subnets"], "thin_universe": bool(row["thin_universe"]),
+                       "tao_usd_ret_24h": row["tao_usd_ret_24h"], "sum_prices_ret_24h": row["sum_prices_ret_24h"],
+                       "reused": row["source"]}
+            return RegimeResult(label, metrics["raw_regime"], metrics, float(v_w_by_regime[label]))
+    rows = await db.fetchall(_REGIME_SQL, (int(slot) - 86400, int(slot), int(cutoff),
+                                           1 if mode == "reconstructed" else 0))
+    per: dict[int, list[dict]] = {}
+    for r in rows:
+        per.setdefault(int(r["netuid"]), []).append({"ts": int(r["hour_ts"]), "price": float(r["price"])})
+    metrics = compute_regime_metrics(per, params)
+    label = label_for(metrics)
+    metrics.update(await _diagnostics(db, int(slot), int(cutoff)))
+    return RegimeResult(label, str(metrics["raw_regime"]).upper(), metrics, float(v_w_by_regime[label]))

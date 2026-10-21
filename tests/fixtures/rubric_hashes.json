@@ -1,0 +1,8 @@
+{
+  "app/nlp/prompts/classify_v1.md": "e47d012b8deeb4622a28738edb1facd3e3e4743a47666c505731112ebf057124",
+  "label_policy_ts-1.0": {
+    "bulk": ["claude-haiku-5-5:e47d012b:1"],
+    "escalation": ["claude-sonnet-5-5:e47d012b:1"],
+    "fallback": ["rules:v2"]
+  }
+}

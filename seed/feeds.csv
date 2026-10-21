@@ -1,0 +1,17 @@
+# Spec 09 Appendix A.1 feed registry -> watch_channels(source='seed_feeds'); INSERT OR IGNORE (operator edits survive).
+# enabled=0 rows are written retired; filtered=1 = publisher feed (NEWS_KEYWORDS / registry-rule filter). Probed 2026-10-18.
+kind,label,url,occupant_netuid,enabled,filtered,notes
+google_news,Bittensor subnet,https://news.google.com/rss/search?q=%22Bittensor%22+subnet&hl=en-US&gl=US&ceid=US:en,,1,0,"global query 1; verified 2026-10-18 (100 items, <source url>, ' - Publisher' title suffix)"
+google_news,Bittensor,https://news.google.com/rss/search?q=Bittensor&hl=en-US&gl=US&ceid=US:en,,1,0,global query 2; verified 2026-10-18 (100 items spanning 2025-11..2026-10)
+rss,Cointelegraph,https://cointelegraph.com/rss,,1,1,"publisher, keyword-filtered; verified 2026-10-18 (30 items; utm_* links; 304 on Last-Modified)"
+rss,Decrypt,https://decrypt.co/feed,,1,1,"publisher, keyword-filtered; verified 2026-10-18 (37 items; 304 on Last-Modified)"
+rss,The Block,https://www.theblock.co/rss.xml,,1,1,"publisher, keyword-filtered; verified 2026-10-18 (20 items)"
+substack,A Bittensor Journey,https://www.abittensorjourney.com/feed,,1,0,"monthly digest; verified 2026-10-18 (20 items, ~730 KB; 304 on ETag)"
+rss,tao.media,https://www.tao.media/feed/,,0,0,dead: 404 on 2026-10-18; re-enable with a working URL
+rss,SimplyTao,https://simplytao.ai/blog/rss,,0,0,dead: 500 on 2026-10-18
+substack,Pine Analytics,https://pineanalytics.substack.com/feed,,1,1,general crypto research (2026-10-16 item is a Jupiter report) -> keyword-filtered
+substack,Subnet Edge,https://subnetedge.substack.com/feed,,1,0,"paid; titles/teasers; verified 2026-10-18 (20 items, newest 2026-02-09 - dormant)"
+substack,0xSammy - The Agentic Future,https://www.0xsammy.com/feed,,1,0,"verified 2026-10-18 (20 items, ~1.8 MB body)"
+rss,Own Your Mind,https://ownyourmind.ai/feed,,0,0,dead: 404 on 2026-10-18
+rss,bex.co blog,https://bex.co/blog/feed,,0,0,dead: 500 on 2026-10-18
+youtube,Novelty Search playlist,https://www.youtube.com/feeds/videos.xml?playlist_id=PLN0WJc6io8zqEknIutfyEjiJViazrxrzU,,1,0,"YOUTUBE_NOVELTY_PLAYLIST_ID; items attributed by match_occupants(title + description); verified 2026-10-18 (13 entries, OTF channel)"

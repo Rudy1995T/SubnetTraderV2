@@ -1,0 +1,367 @@
+[
+ {
+  "alpha_out_tao": 2626408,
+  "auto_lock_enabled": false,
+  "owner": {
+   "locked_perp": 1269236.8,
+   "locked_decay": 0,
+   "conviction": 1269236.8,
+   "pct": 48.326,
+   "count": 1
+  },
+  "to_owner": {
+   "locked_perp": 85849.0,
+   "locked_decay": 0,
+   "conviction": 85849.0,
+   "pct": 3.269,
+   "count": 1
+  },
+  "owner_side": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0
+  },
+  "challenger": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0,
+   "max_pct": 0
+  },
+  "rows": [
+   {
+    "bucket": "owner",
+    "coldkey": "5Fxp7QBG81X7PLdMkAe1RLCvqqfQSw9rJC5ppEQs9FP8qez9",
+    "hotkey": "5EWwdZB7qCCMaAso5Mzcks4UUcPxKYvpAj32t5Mg1v6HSxoF",
+    "amount_locked": 1269236.8,
+    "conviction": 1269236.8,
+    "pct": 48.326,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "to_owner",
+    "coldkey": "5HMtFEQ9Kw3j4mKyQKX17HutMSB5o1jLWbFMTGgVkzeS8CCx",
+    "hotkey": "5EWwdZB7qCCMaAso5Mzcks4UUcPxKYvpAj32t5Mg1v6HSxoF",
+    "amount_locked": 85849.0,
+    "conviction": 85849.0,
+    "pct": 3.269,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   }
+  ],
+  "days_to_king": null,
+  "days_to_king_row": null,
+  "meta": {
+   "netuid": 79,
+   "name": "MVTRX",
+   "symbol": "\u064a",
+   "owner_coldkey": "5Fxp7QBG81X7PLdMkAe1RLCvqqfQSw9rJC5ppEQs9FP8qez9",
+   "owner_hotkey": "5EWwdZB7qCCMaAso5Mzcks4UUcPxKYvpAj32t5Mg1v6HSxoF",
+   "registration_timestamp": "2025-03-21T03:07:00Z",
+   "registration_block": 5173967,
+   "active_keys": 256,
+   "total_alpha": 5340139603767899,
+   "price_tao": 0.003030391
+  },
+  "netuid": 79
+ },
+ {
+  "alpha_out_tao": 3240668,
+  "auto_lock_enabled": true,
+  "owner": {
+   "locked_perp": 646673.7,
+   "locked_decay": 0,
+   "conviction": 646673.7,
+   "pct": 19.955,
+   "count": 1
+  },
+  "to_owner": {
+   "locked_perp": 163249.4,
+   "locked_decay": 983.8000000000001,
+   "conviction": 164233.2,
+   "pct": 5.0680000000000005,
+   "count": 4
+  },
+  "owner_side": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0
+  },
+  "challenger": {
+   "locked_perp": 0,
+   "locked_decay": 0.3,
+   "conviction": 0.4,
+   "pct": 0.0,
+   "count": 1,
+   "max_pct": 0
+  },
+  "rows": [
+   {
+    "bucket": "owner",
+    "coldkey": "5FRYKhbmfXPDoHdUUDMx27E3HuMvAzwjzFMMq3rNurUhAyS9",
+    "hotkey": "5CS3g6nVJM6ouns8n9buN9CzFf2C1YDHVcVGRcxoirKs2xbV",
+    "amount_locked": 646673.7,
+    "conviction": 646673.7,
+    "pct": 19.955,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "to_owner",
+    "coldkey": "5HMtFEQ9Kw3j4mKyQKX17HutMSB5o1jLWbFMTGgVkzeS8CCx",
+    "hotkey": "5CS3g6nVJM6ouns8n9buN9CzFf2C1YDHVcVGRcxoirKs2xbV",
+    "amount_locked": 163249.4,
+    "conviction": 163249.4,
+    "pct": 5.038,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "to_owner",
+    "coldkey": "5Dnt7Nej3pptFaKTHja8CcEwhfYkje8FQ9cA1dVKH8Mtqurq",
+    "hotkey": "5CS3g6nVJM6ouns8n9buN9CzFf2C1YDHVcVGRcxoirKs2xbV",
+    "amount_locked": 627.7,
+    "conviction": 627.7,
+    "pct": 0.019,
+    "perpetual": false,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "to_owner",
+    "coldkey": "5F2Hi9dR6Aeda3K3p6SqqyyxZ1R1FnkbFWhtBf25rKqQgC1k",
+    "hotkey": "5CS3g6nVJM6ouns8n9buN9CzFf2C1YDHVcVGRcxoirKs2xbV",
+    "amount_locked": 338.4,
+    "conviction": 338.4,
+    "pct": 0.01,
+    "perpetual": false,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "to_owner",
+    "coldkey": "5GRJ1hwdoYzmXVPVCAm4jh1xVzuBZnZi8yAw3zsxR8uWddmH",
+    "hotkey": "5CS3g6nVJM6ouns8n9buN9CzFf2C1YDHVcVGRcxoirKs2xbV",
+    "amount_locked": 17.7,
+    "conviction": 17.7,
+    "pct": 0.001,
+    "perpetual": false,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "challenger",
+    "coldkey": "5HSrom4tkcNjFJLCA8eDPfyWDFTyJcw5WuLVrvssEjfwH9EN",
+    "hotkey": "5FTzsDqHH9QZVnirTodscPxQep4f98gda9RmZdKJ6jdGvweU",
+    "amount_locked": 0.3,
+    "conviction": 0.4,
+    "pct": 0.0,
+    "perpetual": false,
+    "days_to_king": null,
+    "days_to_king_reason": "decaying lock (conviction peaks then declines)"
+   }
+  ],
+  "days_to_king": null,
+  "days_to_king_row": null,
+  "meta": {
+   "netuid": 64,
+   "name": "Chutes",
+   "symbol": "\u0634",
+   "owner_coldkey": "5FRYKhbmfXPDoHdUUDMx27E3HuMvAzwjzFMMq3rNurUhAyS9",
+   "owner_hotkey": "5CS3g6nVJM6ouns8n9buN9CzFf2C1YDHVcVGRcxoirKs2xbV",
+   "registration_timestamp": "2024-12-21T16:53:12Z",
+   "registration_block": 4531295,
+   "active_keys": 256,
+   "total_alpha": 6467270093834020,
+   "price_tao": 0.0672811
+  },
+  "netuid": 64
+ },
+ {
+  "alpha_out_tao": 3915704,
+  "auto_lock_enabled": false,
+  "owner": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0
+  },
+  "to_owner": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0
+  },
+  "owner_side": {
+   "locked_perp": 150292.8,
+   "locked_decay": 0,
+   "conviction": 114061.6,
+   "pct": 2.913,
+   "count": 1
+  },
+  "challenger": {
+   "locked_perp": 599707.0000000001,
+   "locked_decay": 0,
+   "conviction": 441680.80000000005,
+   "pct": 11.279000000000002,
+   "count": 7,
+   "max_pct": 15.315000000000001
+  },
+  "rows": [
+   {
+    "bucket": "challenger",
+    "coldkey": "5EszNHUE4nxaRadbmh8LbDmU7LXZz5K8U5seTKNyW32sUnvn",
+    "hotkey": "5ELAvsvXL9kU9CMzkFcRiqFjw3QGVgA7MrvEfcHsicv5WvWX",
+    "amount_locked": 224095.9,
+    "conviction": 180182.0,
+    "pct": 4.602,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": "never (this row caps at 5.7% of eligible alpha; needs 18.0% to win \u2014 18% solo bar or beat the owner)"
+   },
+   {
+    "bucket": "challenger",
+    "coldkey": "5HYMi3cmvWVfAJiJT4haCRxvLY2rX2euiSruaaJw9DPr8q6Q",
+    "hotkey": "5ELAvsvXL9kU9CMzkFcRiqFjw3QGVgA7MrvEfcHsicv5WvWX",
+    "amount_locked": 142692.5,
+    "conviction": 114730.4,
+    "pct": 2.93,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": "never (this row caps at 3.6% of eligible alpha; needs 18.0% to win \u2014 18% solo bar or beat the owner)"
+   },
+   {
+    "bucket": "owner_side",
+    "coldkey": "5ELutYW7EdFUS38CPGkDnbwkeMrpppi6ujEC825jTP7maAuL",
+    "hotkey": "5ELAvsvXL9kU9CMzkFcRiqFjw3QGVgA7MrvEfcHsicv5WvWX",
+    "amount_locked": 150292.8,
+    "conviction": 114061.6,
+    "pct": 2.913,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   },
+   {
+    "bucket": "challenger",
+    "coldkey": "5HMtFEQ9Kw3j4mKyQKX17HutMSB5o1jLWbFMTGgVkzeS8CCx",
+    "hotkey": "5ELAvsvXL9kU9CMzkFcRiqFjw3QGVgA7MrvEfcHsicv5WvWX",
+    "amount_locked": 138182.2,
+    "conviction": 104868.9,
+    "pct": 2.678,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": "never (this row caps at 3.5% of eligible alpha; needs 18.0% to win \u2014 18% solo bar or beat the owner)"
+   },
+   {
+    "bucket": "challenger",
+    "coldkey": "5EkgAah9eK17ymhoqZxCVDZEqL7PDftXmBWSUDcJEFqHTb5b",
+    "hotkey": "5ELAvsvXL9kU9CMzkFcRiqFjw3QGVgA7MrvEfcHsicv5WvWX",
+    "amount_locked": 33212.6,
+    "conviction": 26680.2,
+    "pct": 0.681,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": "never (this row caps at 0.8% of eligible alpha; needs 18.0% to win \u2014 18% solo bar or beat the owner)"
+   },
+   {
+    "bucket": "challenger",
+    "coldkey": "5HKhZDBuSPh3srRhwjyV3SunnXhx5vFKdpR3yqUsE8924Hes",
+    "hotkey": "5ELAvsvXL9kU9CMzkFcRiqFjw3QGVgA7MrvEfcHsicv5WvWX",
+    "amount_locked": 11521.0,
+    "conviction": 8706.1,
+    "pct": 0.222,
+    "perpetual": true,
+    "days_to_king": null,
+    "days_to_king_reason": "never (this row caps at 0.3% of eligible alpha; needs 18.0% to win \u2014 18% solo bar or beat the owner)"
+   }
+  ],
+  "days_to_king": null,
+  "days_to_king_row": null,
+  "meta": {
+   "netuid": 24,
+   "name": "Quasar",
+   "symbol": "\u03c9",
+   "owner_coldkey": "5ELutYW7EdFUS38CPGkDnbwkeMrpppi6ujEC825jTP7maAuL",
+   "owner_hotkey": "5ELpkVn84ubfA7cYtz8YxL3NKYBSvMEZNGzkibkmsDe6YVcL",
+   "registration_timestamp": "2024-03-10T22:02:36.003Z",
+   "registration_block": 2538424,
+   "active_keys": 256,
+   "total_alpha": 6160376869423547,
+   "price_tao": 0.008317502
+  },
+  "netuid": 24
+ },
+ {
+  "alpha_out_tao": 138715,
+  "auto_lock_enabled": false,
+  "owner": {
+   "locked_perp": 0,
+   "locked_decay": 47848.3,
+   "conviction": 47848.3,
+   "pct": 34.494,
+   "count": 1
+  },
+  "to_owner": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0
+  },
+  "owner_side": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0
+  },
+  "challenger": {
+   "locked_perp": 0,
+   "locked_decay": 0,
+   "conviction": 0,
+   "pct": 0,
+   "count": 0,
+   "max_pct": 0
+  },
+  "rows": [
+   {
+    "bucket": "owner",
+    "coldkey": "5DCjvVt6LbtM5YhMd3McczwSQpu4w85Gq5ENqSsyXjwgJxpZ",
+    "hotkey": "5EFY7fKVPCNcc89CdnSV4v6QxySoGR5Ad2R2AGaEwVbMkAZR",
+    "amount_locked": 47848.3,
+    "conviction": 47848.3,
+    "pct": 34.494,
+    "perpetual": false,
+    "days_to_king": null,
+    "days_to_king_reason": null
+   }
+  ],
+  "days_to_king": null,
+  "days_to_king_row": null,
+  "meta": {
+   "netuid": 36,
+   "name": "Epago",
+   "symbol": "\u05db",
+   "owner_coldkey": "5DCjvVt6LbtM5YhMd3McczwSQpu4w85Gq5ENqSsyXjwgJxpZ",
+   "owner_hotkey": "5EFY7fKVPCNcc89CdnSV4v6QxySoGR5Ad2R2AGaEwVbMkAZR",
+   "registration_timestamp": "2026-08-20T06:57:48Z",
+   "registration_block": 8884359,
+   "active_keys": 29,
+   "total_alpha": 372274685993527,
+   "price_tao": 0.001213526
+  },
+  "netuid": 36
+ }
+]

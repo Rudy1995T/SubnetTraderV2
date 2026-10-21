@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCxLqly5YxULobLJwcYjMhJQ"/>
+ <id>yt:channel:xLqly5YxULobLJwcYjMhJQ</id>
+ <yt:channelId>xLqly5YxULobLJwcYjMhJQ</yt:channelId>
+ <title>taostats</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCxLqly5YxULobLJwcYjMhJQ"/>
+ <author>
+  <name>taostats</name>
+  <uri>https://www.youtube.com/channel/UCxLqly5YxULobLJwcYjMhJQ</uri>
+ </author>
+ <published>2024-03-22T13:01:46+00:00</published>
+ <entry>
+  <id>yt:video:yH0lH-6gnNQ</id>
+  <yt:videoId>yH0lH-6gnNQ</yt:videoId>
+  <yt:channelId>UCxLqly5YxULobLJwcYjMhJQ</yt:channelId>
+  <title>Novelty Search -root reborn</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=yH0lH-6gnNQ"/>
+  <author>
+   <name>taostats</name>
+   <uri>https://www.youtube.com/channel/UCxLqly5YxULobLJwcYjMhJQ</uri>
+  </author>
+  <published>2026-08-07T10:04:00+00:00</published>
+  <updated>2026-10-04T20:09:37+00:00</updated>
+  <media:group>
+   <media:title>Novelty Search -root reborn</media:title>
+   <media:content url="https://www.youtube.com/v/yH0lH-6gnNQ?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/yH0lH-6gnNQ/hqdefault.jpg" width="480" height="360"/>
+   <media:description></media:description>
+   <media:community>
+    <media:starRating count="19" average="5.00" min="1" max="5"/>
+    <media:statistics views="317"/>
+   </media:community>
+  </media:group>
+ </entry><entry>
+  <id>yt:video:cjMLWRhFQyo</id>
+  <yt:videoId>cjMLWRhFQyo</yt:videoId>
+  <yt:channelId>UCxLqly5YxULobLJwcYjMhJQ</yt:channelId>
+  <title>Novelty Search: April 15, 2026: Conviction</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=cjMLWRhFQyo"/>
+  <author>
+   <name>taostats</name>
+   <uri>https://www.youtube.com/channel/UCxLqly5YxULobLJwcYjMhJQ</uri>
+  </author>
+  <published>2026-04-15T23:50:54+00:00</published>
+  <updated>2026-09-30T08:34:25+00:00</updated>
+  <media:group>
+   <media:title>Novelty Search: April 15, 2026: Conviction</media:title>
+   <media:content url="https://www.youtube.com/v/cjMLWRhFQyo?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/cjMLWRhFQyo/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Const introduces conviction - stopped after 65 minutes (sorry Doug had to go to the gym :D )</media:description>
+   <media:community>
+    <media:starRating count="18" average="5.00" min="1" max="5"/>
+    <media:statistics views="461"/>
+   </media:community>
+  </media:group>
+ </entry><entry>
+  <id>yt:video:7thJFwrt4cM</id>
+  <yt:videoId>7thJFwrt4cM</yt:videoId>
+  <yt:channelId>UCxLqly5YxULobLJwcYjMhJQ</yt:channelId>
+  <title>Novelty Search feb 12, 2026</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=7thJFwrt4cM"/>
+  <author>
+   <name>taostats</name>
+   <uri>https://www.youtube.com/channel/UCxLqly5YxULobLJwcYjMhJQ</uri>
+  </author>
+  <published>2026-02-12T21:10:12+00:00</published>
+  <updated>2026-10-01T04:02:24+00:00</updated>
+  <media:group>
+   <media:title>Novelty Search feb 12, 2026</media:title>
+   <media:content url="https://www.youtube.com/v/7thJFwrt4cM?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/7thJFwrt4cM/hqdefault.jpg" width="480" height="360"/>
+   <media:description></media:description>
+   <media:community>
+    <media:starRating count="4" average="5.00" min="1" max="5"/>
+    <media:statistics views="85"/>
+   </media:community>
+  </media:group>
+ </entry></feed>

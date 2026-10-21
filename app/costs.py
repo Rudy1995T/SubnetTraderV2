@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from calendar import monthrange
 from dataclasses import asdict, dataclass
@@ -519,10 +520,16 @@ class CostGovernor:
         return out
 
 
-# ── estimation helpers (spec 10 owns the values; UNVERIFIED until Phase 9 checks current pricing) ──────────────
-PRICES: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5-20251001": (1.0, 5.0),
+# ── estimation helpers (spec 10 owns the values; re-verified 2026-10-18 against the claude-api skill) ──────────────
+PRICES: dict[str, tuple[float, float]] = {        # USD per MTok (input, output); 10 §2.3/§6.3, skill cache 2026-10-06
+    "claude-haiku-5-5": (0.10, 0.50),              # prompts ≤ 100K tokens (TaoSentinel requests are ≈ 10K)
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-opus-5": (5.0, 25.0),
 }
+_DATED = re.compile(r"-\d{8}$")
 
 
 def _prices() -> dict[str, tuple[float, float]]:
@@ -539,7 +546,8 @@ def _prices() -> dict[str, tuple[float, float]]:
 
 def estimate_llm_usd(model: str, in_tokens: int, out_tokens: int, *, batch: bool = False,
                      cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float:
-    pin, pout = _prices().get(model, (0.0, 0.0))
+    prices = _prices()
+    pin, pout = prices.get(model) or prices.get(_DATED.sub("", model), (0.0, 0.0))   # dated id → its alias
     usd = (in_tokens * pin + out_tokens * pout + cache_read_tokens * pin * 0.1 + cache_write_tokens * pin * 1.25) / 1e6
     return usd * (0.5 if batch else 1.0)
 

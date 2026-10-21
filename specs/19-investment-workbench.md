@@ -1,6 +1,6 @@
 # 19 — Subnet Investment Workbench (charts, technicals, dereg distance, activity, ranking)
 
-**Status:** `built` W2–W6 2026-10-16 (W0/W1 done earlier; W4b waits for Phases 4/6/9 — see §7) · **Phase:** a workbench track beside the master plan (§7); its jobs are declared with `phase = 3`, the phase whose data they need · **Owner of:** the `wb_*` and `chain_constants_probe` jobs, `app/features/technicals.py`, `app/features/dereg_distance.py`, `app/collectors/chain_probe.py`, `app/collectors/wb_github_probe.py`, `app/wb/` (screener, vision, study), `app/api/wb.py` (`/api/v1/wb/*`), `frontend/wb/` (`/wb`) · **Depends on:** 03 (DDL, migration 0003), 05 (chain snapshot, `chain_constants`), 17 (history), 14 (serving + auth), 16 (cost governor), 06/08/09 (full activity data, later), 13 (gate harness, later) · **Reconciled with 02 §K** (2026-10-16; this text now states every §K decision itself, and §K was amended to match the changes in §12) · **Research:** `research/03-*.md` (2026-10-09) and the chain reads of 2026-10-16 (§2.4).
+**Status:** `built` W2–W6 2026-10-16, W7 (τ Terminal integration, §2.9) 2026-10-17 (W0/W1 done earlier; W4b waits for Phases 4/6/9 — see §7) · **Phase:** a workbench track beside the master plan (§7); its jobs are declared with `phase = 3`, the phase whose data they need · **Owner of:** the `wb_*` and `chain_constants_probe` jobs, `app/features/technicals.py`, `app/features/dereg_distance.py`, `app/collectors/chain_probe.py`, `app/collectors/wb_github_probe.py`, `app/wb/` (screener, vision, study), `app/api/wb.py` (`/api/v1/wb/*`), `frontend/wb/` (`/wb`); in `~/tao-terminal` (W7): `app/workbench.py`, the Screener tab, the EMA-band indicator, the ticket's pre-trade checks · **Depends on:** 03 (DDL, migration 0003), 05 (chain snapshot, `chain_constants`), 17 (history), 14 (serving + auth), 16 (cost governor), 06/08/09 (full activity data, later), 13 (gate harness, later) · **Reconciled with 02 §K** (2026-10-16; this text now states every §K decision itself, and §K was amended to match the changes in §12) · **Research:** `research/03-*.md` (2026-10-09) and the chain reads of 2026-10-16 (§2.4).
 
 ---
 
@@ -20,6 +20,15 @@ TaoSentinel already designs most inputs (P1 chain, P2 GitHub, P5 community, a va
 | Scores / harness | Phase 8 (scoring) and Phase 10 (harness, spec 13) are unbuilt. The workbench study (§2.8) is an exploration tool, not 13's gate. |
 | **Chain change found 2026-10-16** | `NetworkImmunityPeriod` is now **432,000 blocks (60 d)**. It was 864,000 (120 d) at blocks 9,246,000 and 9,270,000 and is 432,000 at 9,285,000 and 9,295,000 (public archive reads), so it changed around 2026-10-12/14. The config value `NETWORK_IMMUNITY_PERIOD_BLOCKS=864000` (05) and TMC's `immune` flag are both stale (TMC still marks SN16, 837,617 blocks old, as immune). The workbench reads the live value (§2.4); 05 keeps its config value until the operator updates it (§11 Q2). |
 
+### 0.1b What changed on 2026-10-16/17: the τ Terminal
+
+This spec was written before the **τ Terminal** existed (`~/tao-terminal`, `127.0.0.1:8787`, its own plan). The terminal now has what §2.6's `/wb` page had to build from scratch, and more: TradingView-style charts on per-block chain candles (1m–1W, EMA72 + RSI by default, drawings, alerts), every local and watched **wallet** with its full TaoStats **trade history** marked on the chart, average-cost **positions/PnL** with exit value from `sim_swap`, a paper/live trade ticket, the ✨ **Insights** tab (trader score) and **trade forensics** (`data/analysis/LESSONS.md`: what cost money in 3,307 real trades).
+
+Consequences for this spec:
+- **The terminal is the workbench's main screen** (W7, §2.9). TaoSentinel keeps computing every number (§2.3–§2.5, §2.8) and serving them on `/api/v1/wb/*`; the terminal reads that API and joins it with what only the terminal knows (holdings, avg entry, your trades). TaoSentinel still never reads a wallet.
+- `/wb` on :8090 stays as the fallback page and the home of the screenshot upload / vision read (§2.7): the terminal draws its own charts, so uploading a screenshot is rarely needed.
+- The forensics findings become **pre-trade checks** in the ticket (§2.9.4): advisory, every one traced to a lesson or a §2.4 number.
+
 ### 0.2 What the history can answer (feasibility research, 2026-09-24 bar)
 - EMA72 distance is computable for ~120 active occupants on 1 d bars and all on 1 h bars. The cross-section is skewed (median −16.6 % below the daily EMA72; 96/120 below a ±2σ band), so the screener sorts on a **rank** of the band position, not the raw number.
 - Dereg distance reproduced TMC's bottom-3 badge exactly on 2026-09-24. The bottom cluster is tight (rank 4 was 0.45 % above the cull line).
@@ -36,6 +45,7 @@ TaoSentinel already designs most inputs (P1 chain, P2 GitHub, P5 community, a va
 - **W4a activity stop-gaps owned here** — job `wb_github_probe` (unauthenticated `pushed_at`), TMC `commits_7d/30d/90d` surfaced from `chain_hourly`.
 - **W5 workbench UI** — `/api/v1/wb/*` routes, the `/wb` page (screener, weight sliders, presets, per-subnet chart with EMA band and cull line, upload panel), Claude vision chart read stored as a note.
 - **W6 study** — `python -m app.wb.study`: factor rank-IC and a matched-survivor death study on the saved panel, saved under `data/quant/results/`, listed in the UI; legacy results import.
+- **W7 τ Terminal integration** — §2.9: wallet-aware Screener tab with sliders/presets, EMA72 σ-band indicator and dereg legend on the terminal chart, dereg/band risk beside each position, pre-trade checks in the ticket, desktop alerts when a held subnet enters the cull zone.
 
 **Not built here (owners build them in their phases; the screener shows them when their rows exist)**
 - **W4b** — 06 P2 metrics (needs `GITHUB_TOKEN`), 08's keyless `discord_6h`/`telegram_daily`, 09's free `x_ctf_crosscheck`. 02 §K6 retired a workbench Discord job so absence/topology rules stay 08's.
@@ -46,7 +56,8 @@ TaoSentinel already designs most inputs (P1 chain, P2 GitHub, P5 community, a va
 - Trading or capital allocation (spec 15). The workbench is for a human analyst.
 - Paid X data, LLM post classification (Phase 9).
 - `dereg_recovery_ratio` (what a holder gets back when culled): the formula is UNVERIFIED against the chain's dissolve logic; deferred (§11 Q7).
-- Wallet handling or the old bot's positions.
+- Wallet handling inside TaoSentinel. Wallet context (holdings, avg entry, trade history) is joined **in the terminal only** (§2.9); the terminal never writes to TaoSentinel. One read-only exception (2026-10-20): the Telegram bot's `/wallet` view (14 §8.4a) renders the terminal's own API on loopback and shows TaoSentinel's tier/flags beside held subnets; TaoSentinel stores no wallet data.
+- Blocking trades on a check. §2.9.4's checks are advice; the terminal's hard limits (`[trading]` in its `config.toml`) are unchanged.
 
 ---
 
@@ -188,6 +199,49 @@ Outputs per factor and horizon: mean daily Spearman IC, its t-stat on non-overla
 
 **Legacy results:** `python -m scripts.import_legacy_results [--src <SubnetTrader>/data/backtest/results]` copies the old bot's 123 result files read-only to `data/quant/legacy/` and writes `data/quant/legacy/index.json` (`file, size, mtime, kind, title`); the results route lists them too.
 
+### 2.9 τ Terminal integration (W7)
+
+**Boundary.** The terminal (`~/tao-terminal`) calls TaoSentinel over HTTP on the server side (the page's CSP is `connect-src 'self'`): `GET {workbench_url}/api/v1/wb/screener` (cached 60 s) and `/api/v1/wb/results` (cached 10 min), timeout 5 s. It never reads TaoSentinel's DB for workbench data and never POSTs to it. TaoSentinel down → the Screener tab and the dereg parts of the checks say "workbench unavailable"; charts, positions and the terminal-side checks keep working.
+
+#### 2.9.1 Terminal endpoints (`app/workbench.py`, routes in `app/server.py`)
+| route | returns |
+|---|---|
+| `GET /api/workbench/screener?wallet=` | the 19 screener payload (`as_of`, `stale`, `network`, `factors`, `rows`) with, per row, `price_live` (the terminal's live price) and `you` = the selected wallets' context (`held` α, `value` τ at spot, `avg_entry`, `unreal_pct` vs avg entry, `realized`, `buys`, `sells`, `last_trade_ts`; null when never traded; the current occupant only); plus `ic` (factor → horizon → mean IC from the newest `wb_study_*.json`) and `ok`/`error` |
+| `GET /api/workbench/checks?netuid=&side=&amount=&wallet=` | `{checks: [{level, code, text, lesson}], context}` (§2.9.4); `level ∈ stop · warn · info · ok` |
+
+#### 2.9.2 Screener tab (bottom panel, "🔎 Screener")
+Network weather strip (pool size, k₃₀, next registration ETA, lock cost, immunity period + source, `as_of`, stale banner); filters All / Held / Traded / ★ Favourites + search; collapsible **sliders** (one per 19 factor, −1…+1, the study's IC beside each) with presets saved in the terminal's settings (`wb_presets`); a sortable table: subnet, price, 24 h, 7 d, pool τ, band pos 1 h and 1 d, dist EMA72 1 d, dereg rank₃₀/k₃₀, gap to cull k₃₀, immunity days, vol 30 d, DD 90 d, dev activity (commits 30 d, days since push), **you** (value τ, unrealised %), and **Score** = `Σ wᵢ·pct(xᵢ)` over the visible rows (weight sign = direction, a missing value contributes 0.5 — the same rule as §2.6; the built-in preset *Usual reading* sets `wᵢ = ½·dirᵢ`). Holdings worth < 0.01 τ count as dust (not "held"). Labelled *exploration — not validated*. A row click opens the chart. Coverage: `failed` → "?" with its reason as the tooltip; no row → "—".
+
+#### 2.9.3 Chart and positions
+- **Indicator `EMA band (σ)`** (`emaband`, params `period 72, k 2`): upper/lower = `EMA·e^{±kσ}`, σ = RMS of `ln(close/EMA)` over the last `period` bars, ≥ 24 deviations (§2.3, same as `technicals.overlay`), on any timeframe; the legend shows the band position `ln(close/EMA)/(kσ)`. JS (`static/indicators.js`) and Python (`app/indicators.py`) twins, tested equal. On by default (added once to saved layouts).
+- **Dereg legend line** on subnet charts (TAO unit): `dereg rank₃₀ r/k · cull line (k₃₀) p · gap g% · immune until d` from the screener row; cull lines are drawn as price lines in moving-price space **only when within 50 % of the price** (a price line stretches the price scale; SN71's sits 77 % below), so the legend always carries the distance.
+- **Positions tab**: a "Risk" column per open position: dereg rank₃₀ ≤ k₃₀ (red), gap to cull k₃₀ < 25 % or immunity ends ≤ 7 d (amber), band pos 1 d (number).
+- **Held-subnet alerts** (server thread, every 10 min, subnets held for ≥ 0.01 τ in any tracked wallet): `dereg_rank_30d ≤ k_30` (entered the expected-cull zone), `0 < immunity_remaining_days ≤ 7`, `mp_gap_to_cull_1 < 10 %` → desktop notification + SSE `alert`, once per (netuid, code, UTC day), remembered in settings `wb_alerts_fired`.
+
+#### 2.9.4 Pre-trade checks (ticket, advisory)
+Computed server-side from the terminal's own candles/positions/history (rows 1–7) and the workbench row (rows 8–11); shown in the ticket as the amount changes and in the confirm dialog. Thresholds are constants in `app/workbench.py`, sourced as listed.
+
+| # | code | when (buy unless noted) | level | source |
+|---|---|---|---|---|
+| 1 | `pool_share` | amount / pool TAO > 0.5 % (stop), > 0.25 % (warn) | stop / warn | LESSONS §1 |
+| 2 | `above_ema72` | spot ≥ 20 % above EMA72 on 1 h bars | warn | LESSONS §3 |
+| 3 | `chase` | 7 d change ≥ +25 % or 24 h ≥ +15 % | warn | LESSONS §3 |
+| 4 | `tao_pump` | TAO/USD up ≥ 10 % over 7 d | warn | LESSONS §3 |
+| 5 | `avg_down` | already holding and spot < avg entry | warn | LESSONS §2–3 |
+| 6 | `after_loss` | a sell that realised a loss in the selected wallets within 24 h | warn | LESSONS §3–4 |
+| 7 | `record` | your realised τ and trade count on this subnet (both sides) | info | positions |
+| 8 | `cull_zone` | not immune and `dereg_rank_30d ≤ k_30` | stop | §2.4 |
+| 9 | `cull_near` | `mp_gap_to_cull_k_30d < 25 %`, or immunity ends ≤ 7 d with `dereg_rank_30d ≤ 2·k_30` | warn | §2.4 |
+| 10 | `band_high` | `ema72_band_pos_1d > 1` (above the daily band) | warn | §2.3 |
+| 11 | `immune` | `immunity_remaining_days > 30` | ok | §2.4 |
+| — | `sell_loss` | sell below avg entry: realises ≈ x % on the sold part | info | positions |
+| — | `wb_unavailable` | workbench unreachable or `stale` | info | — |
+
+Each check carries `lesson` (the one-line rule) for its tooltip. No check blocks a trade.
+
+#### 2.9.5 Terminal config (`config.toml [workbench]`)
+`url = "http://127.0.0.1:8090"`, `enabled = true`, `timeout_secs = 5`, `alerts = true`.
+
 ---
 
 ## 3. Data contract
@@ -279,6 +333,7 @@ All four jobs are `JOB_TABLE` rows (owner 19, phase 3), none `ops_exempt`, none 
 | W4b | 06 (Phase 4), 08 keyless half (`discord_6h`, `telegram_daily`), 09 `x_ctf_crosscheck` | `GITHUB_TOKEN` for 06 | open — built with those specs |
 | W5 | routes, `/wb` page, presets, upload + vision | `ANTHROPIC_API_KEY` for vision only | **built** 2026-10-16 |
 | W6 | study + results page | W2/W3 | **built** 2026-10-16 (exploration); 13's gated version after Phase 10 |
+| W7 | τ Terminal integration (§2.9): Screener tab, EMA band + dereg legend, position risk, pre-trade checks, held-subnet alerts | W2–W5, the terminal | **built** 2026-10-17 |
 | then | Phase 8 scores → tier column; `ts-1.1` only if 13 passes a workbench factor | per 18 | |
 
 ## 8. Tests (`tests/wb/`)
@@ -289,6 +344,7 @@ All four jobs are `JOB_TABLE` rows (owner 19, phase 3), none `ops_exempt`, none 
 - API: screener shape and coverage, chart series equals stored technicals, preset round-trip and auth, chart-read size/type caps, `vision_disabled`, stubbed vision success and refusal → note rows.
 - Study: a synthetic panel with a planted factor gives positive IC; JSON written; trials appended.
 - Conventions: job table 57, catalog 109 keys, new events catalogued with routes, `PAUSE_GROUPS['wb']`, migration 0003 applies on a fresh DB.
+- Terminal (`~/tao-terminal/tests/test_workbench.py`, `test_indicators_js.py`): JS `emaBand` equals the Python twin and §2.3's definition (RMS of log deviations, 24-deviation minimum); every §2.9.4 check fires at its threshold and not below; workbench down → only `wb_unavailable`; wallet join (held/avg entry/realised) on a stubbed screener; alert dedupe per (netuid, code, day).
 
 ## 9. Verify checklist
 ```
@@ -302,21 +358,30 @@ curl :8090/api/v1/wb/screener | jq '.rows|length'  → ≥ 120; every row has co
 browser :8090/wb                         → chart with EMA72 + band + cull line; sliders re-rank; preset saved
 python -m app.wb.study                   → data/quant/results/wb_study_<date>.json; wb_trials.jsonl appended
 pytest                                   → green
+# terminal (W7)
+curl :8787/api/workbench/screener | jq '.rows|length'      → ≥ 120, held rows carry held/avg_entry
+curl ':8787/api/workbench/checks?netuid=71&side=buy&amount=1' → pool_share/above_ema72/… as applicable
+browser :8787 → 🔎 Screener tab sorts and re-ranks; SN71 4H chart shows the σ-band and the dereg legend line;
+                Positions "Risk" column; ticket shows checks; stop TaoSentinel → "workbench unavailable", rest works
+(cd ~/tao-terminal && .venv/bin/pytest) → green
 ```
 
 ## 10. Sources
 Local: `research/03-*.md` (2026-10-09), `research/01-factor-validation-tooling.md`, `research/01-web-social-apis.md`, specs 02/05/06/08/10/12/13/14/16/17. Chain: public finney entrypoint and archive JSON-RPC reads on 2026-10-16 (storage `SubtensorModule::{NetworkImmunityPeriod, SubnetLimit, NetworkRateLimit, NetworkMinLockCost, NetworkLastLockCost, NetworkLockReductionInterval, SubnetMovingAlpha, LastRateLimitedBlock}`, runtime API `SubnetRegistrationRuntimeApi_get_network_registration_cost`). Web (2026-10-09): RaoFoundation/subtensor `subnets/subnet.rs`, `coinbase/root.rs`, `stake_utils.rs`, PR #2066, TaoStats dereg docs, TMC API docs.
 
 ## 11. Open questions / operator decisions
-1. **72 EMA definition:** 1 h bars (the old bot's) with a 1 d twin; band = ±2σ of log returns. Confirm, or name the timeframe/band you watch.
-2. **Immunity config:** the chain now says 432,000 blocks. Set `NETWORK_IMMUNITY_PERIOD_BLOCKS=432000` in `.env` (and `reload-config`) so 05's `immune_local`, `dereg_safety` and `dereg_risk_flag` match the chain? The workbench already uses the live value.
+1. **72 EMA definition:** 1 h bars (the old bot's) with a 1 d twin; band = ±2σ where σ = RMS of `ln(close/EMA72)` over 72 bars (§2.3; the σ of one-bar returns was tried and pinned everything at ±2). The terminal draws the same band on any timeframe (the screenshot's 4H). Confirm, or name the timeframe/band you watch.
+2. ~~**Immunity config**~~ — **answered**: `.env` has `NETWORK_IMMUNITY_PERIOD_BLOCKS=432000` (2026-10-17).
 3. **05/12 change requests:** pool definition (include not-started/emission-disabled), `k_H` instead of bottom-3, drop the TMC badge from `dereg_risk_flag`, `dereg_imminent` reading `dereg_rank_30d ≤ k_30` — accept into 05/12 (BUILD-LOG entry) or keep as workbench-only keys?
 4. **Vision:** add `ANTHROPIC_API_KEY` and set `WB_VISION_ENABLED=true` when you want screenshot reads (≈ $0.01–0.05 each).
 5. **Weights:** exploration-only sliders (built) vs starting a `ts-1.1` draft.
 6. **GitHub token** timing (unlocks Phase 4 and the honest dev-activity column).
 7. **`dereg_recovery_ratio`:** worth calibrating against a real dissolve (TaoStats liquidation price) before adding?
+8. **Check thresholds (§2.9.4):** taken from LESSONS.md as written (0.25 %/0.5 % of pool, +20 % over EMA72, +25 %/7 d, TAO +10 %/7 d, 24 h after a losing sell). Tune them, or should a `stop` check ever block a *live* trade (today: advice only)?
 
 ## 12. Changelog
+- 2026-10-20: §1 non-goal clarified — the Telegram `/wallet` view (14 §8.4a) reads the terminal's API read-only; TaoSentinel still stores no wallet data and the terminal still never writes to TaoSentinel.
+- 2026-10-17 (W7): the τ Terminal (charts, wallets, history, insights, forensics) became the workbench's main screen: new §0.1b and §2.9 (Screener tab joined with holdings, EMA σ-band indicator, dereg legend + position risk, pre-trade checks from LESSONS.md, held-subnet alerts); `/wb` kept as fallback + vision upload. §11 Q1 corrected to the RMS-of-log-deviation band actually built; Q2 answered (432,000 in `.env`); Q8 added. Scope: wallet context lives in the terminal only; checks never block. Verified: the terminal's `emaBand` equals `technicals.overlay` exactly on the same closes. Found while verifying: TaoSentinel's `price_bars` 1 h (and 5 m) have no rows for 2026-10-17 00:00–11:00Z on all 129 netuids although `chain_hourly` has SSE rows, so the stored `ema72_1h` for SN71 (0.004881) sits 1.8 % above the terminal's (0.004796) at the same `as_of` (BUILD-LOG).
 - 2026-10-16 (rebuild + implementation): status → built W2–W6. Folded 02 §K into the text. Chain facts re-read: immunity 432,000 blocks (changed ~2026-10-13), `LastRateLimitedBlock[0x02]`, runtime-API lock cost and `I_eff`; `wb_dereg` reads the probed immunity. Changes vs §K (02 amended the same day): the network weather lives in a new `wb_dereg_network_hourly` table instead of new `chain_network_hourly` columns (no shared row with the SSE recorder); `mp_vs_spot` → `spot_vs_mp`; `dereg_recovery_ratio` deferred; new keys `repo_pushed_days` (source `github`), `spot_rank`; jobs declared at phase 3, `wb_technicals` a single hourly :12 trigger, `wb_github_probe` hourly :25; upload is a raw-body POST (no multipart dependency); vision through the `anthropic` SDK with server-side fallbacks; routes `/presets`, `/notes` replace `POST /wb/weights`; W6 is a workbench study until 13 exists; W4b moved to the owner specs. Exact window/seed, staleness, rank and cull-line-zero rules added.
 - 2026-10-16: reconciled by 02 §K (names, owners, conventions).
 - 2026-10-09: first draft from the research run.

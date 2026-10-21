@@ -167,11 +167,11 @@ def test_job_table_shape():
 @pytest.mark.asyncio
 async def test_registry_built_phases(rt):
     JobRegistry.build(rt)
-    from tests.conftest import BUILT_PHASE, EXPECTED_AVAILABLE
+    from tests.conftest import BUILT_PHASE, EARLY_JOBS, EXPECTED_AVAILABLE
     assert {"log_retention_daily", "storage_retention_daily", "backup_daily", "ops_guard_5m", "ops_digest_daily",
             "cost_ledger_hourly", "alert_dispatch"} <= set(rt.jobs)
     assert len(rt.jobs) + len(rt.tasks) == EXPECTED_AVAILABLE and len(rt.unavailable) == 57 - EXPECTED_AVAILABLE
-    assert all(SPEC_BY_ID[j].phase <= BUILT_PHASE for j in [*rt.jobs, *rt.tasks])
+    assert all(SPEC_BY_ID[j].phase <= BUILT_PHASE or j in EARLY_JOBS for j in [*rt.jobs, *rt.tasks])
 
 
 @pytest.mark.asyncio
@@ -211,7 +211,7 @@ async def test_setup_scheduler_stagger_and_manual(rt, stub_module):
     boot = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
     sched = setup_scheduler(rt, now=boot)
     from tests.conftest import BUILT_PHASE
-    expect = {"discord_gateway", "telegram_bot"} | ({"chain_sse"} if BUILT_PHASE < 2 else set())
+    expect = ({"telegram_bot"} if BUILT_PHASE < 11 else set()) | ({"chain_sse"} if BUILT_PHASE < 2 else set()) | ({"discord_gateway"} if BUILT_PHASE < 6 else set())
     assert set(rt.unavailable) == expect
     assert sched.get_job("backfill_tmc").next_run_time is None
     staggered = [sp.id for sp in JOB_TABLE if sp.kind == "interval" and sp.first_run == "stagger"]

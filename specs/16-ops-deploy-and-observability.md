@@ -50,7 +50,7 @@ TaoSentinel runs unattended, 24/7, on one Ubuntu laptop that is occasionally pow
 
  data/taosentinel.db ──VACUUM INTO──► data/backups/taosentinel-<stamp>.db (+ .db.gz + .json manifest)
                                         └─ copy .db.gz + .json ─► /mnt/taosentinel-mirror/ (only if marker file present)
- Remote access: Windows PC ─Tailscale─► tailscale serve ─► 127.0.0.1:3001 (UI) / 127.0.0.1:8090 (API); UFW drops all other inbound
+ Remote access: Windows PC ─Tailscale─► tailscale serve ─► 127.0.0.1:8090 (API + UI at /ui; :3001 retired 2026-10-18, 14 §8.6); UFW drops all other inbound
 ```
 
 ### 2.2 Laptop preparation (`ops/laptop-prep.sh`)
@@ -183,7 +183,7 @@ TimeoutStartSec=30
 ```
 `ops/notify-failure.sh <unit>` reads `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` from `$SENTINEL_ROOT/.env` with the `kv()` parser of §2.9; collects `systemctl show <unit> -p Result -p NRestarts -p ExecMainStatus -p ActiveEnterTimestamp`, the last 15 lines of `journalctl -u <unit> --no-pager` and of `data/service.log` (HTML-escaped, ≤ 3,500 chars); sends `🛑 <b>TaoSentinel unit FAILED</b> (<unit>) result=… restarts=…` + a `<pre>` tail; always exits 0.
 
-**`ops/systemd/taosentinel-frontend.service`** (Phase 11) — port of `subnettrader-frontend.service` 1-29. `Wants=` (not `Requires=`) so a backend crash never tears the UI down; npm replaced by a direct `node` exec so SIGTERM reaches Next.js and npm never writes `~/.npm/_logs`; logs moved out of `/tmp` (which is private per unit).
+**`ops/systemd/taosentinel-frontend.service`** (Phase 11) — *retired 2026-10-18: 14 §8.6 serves the UI at `/ui` on the backend's port; the unit and `--with-frontend` stay in the repo but must not be installed.* Original text: port of `subnettrader-frontend.service` 1-29. `Wants=` (not `Requires=`) so a backend crash never tears the UI down; npm replaced by a direct `node` exec so SIGTERM reaches Next.js and npm never writes `~/.npm/_logs`; logs moved out of `/tmp` (which is private per unit).
 
 ```ini
 [Unit]

@@ -66,7 +66,8 @@ async def p1_matrix(db: "Database", as_of: int) -> list[dict]:
             o["st"][r["metric_key"]] = r["status"]
     active = [k for k, o in occ.items() if o["status"] == "active" and o["netuid"] != 0]
     for k in RANKG_KEYS:
-        ranked = rankg({o: occ[o]["raw"].get(k) for o in active})
+        present = {o: occ[o]["raw"][k] for o in active if occ[o]["raw"].get(k) is not None}
+        ranked = {o: None for o in active} | rankg(present, min_n=1)
         raw[k] = ranked
     out = []
     for key in active:

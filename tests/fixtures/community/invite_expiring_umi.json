@@ -1,0 +1,18 @@
+{
+ "type": 0,
+ "code": "umiTemp",
+ "expires_at": "2026-09-22T22:53:28+00:00",
+ "guild": {
+  "id": "1471703293599416333",
+  "name": "Umi",
+  "features": [],
+  "verification_level": 1
+ },
+ "channel": {
+  "id": "1471703294000000000",
+  "type": 0,
+  "name": "general"
+ },
+ "approximate_member_count": 172,
+ "approximate_presence_count": 54
+}

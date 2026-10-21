@@ -129,7 +129,8 @@ class Http:
                 hdrs = [(k, v) for k, v in resp.headers.multi_items()
                         if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")]
                 full = httpx.Response(resp.status_code, headers=hdrs, content=bytes(body), request=req,
-                                      extensions={**resp.extensions, "truncated": truncated})
+                                      extensions={**resp.extensions, "truncated": truncated,
+                                                  "elapsed_ms": int((time.monotonic() - t0) * 1000)})
                 if truncated:
                     logger.warning("http_body_truncated", data={"provider": provider, "host": host,
                                                                  "path": redact_path(parts.path), "cap": cap})

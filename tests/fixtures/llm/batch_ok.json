@@ -1,0 +1,11 @@
+{"schema_v": 1, "items": [
+ {"id": "1", "polarity": "bullish", "intensity": 4, "event_type": "exchange_listing", "direction": 1, "materiality": 3,
+  "entities": [{"netuid": 8, "confidence": 1.0}], "is_spam": false, "is_promo": false,
+  "summary": "SN8 Vanta alpha listed on Kraken spot", "confidence": 0.95},
+ {"id": "2", "polarity": "bearish", "intensity": 5, "event_type": "security_incident", "direction": -1, "materiality": 3,
+  "entities": [{"netuid": 15, "confidence": 1.0}], "is_spam": false, "is_promo": false,
+  "summary": "SN15 owner coldkey socially engineered; 147k alpha dumped", "confidence": 0.9},
+ {"id": "3", "polarity": "neutral", "intensity": 1, "event_type": "giveaway_promo", "direction": 0, "materiality": 1,
+  "entities": [{"netuid": 64, "confidence": 1.0}], "is_spam": false, "is_promo": true,
+  "summary": "SN64 giveaway campaign", "confidence": 0.9}
+]}

@@ -1,0 +1,30 @@
+{
+ "type": 0,
+ "code": "bittensor",
+ "expires_at": null,
+ "flags": 2,
+ "guild": {
+  "id": "799672011265015819",
+  "name": "Bittensor",
+  "features": [
+   "NEWS",
+   "COMMUNITY",
+   "DISCOVERABLE",
+   "MEMBER_VERIFICATION_GATE_ENABLED",
+   "PREVIEW_ENABLED"
+  ],
+  "verification_level": 4,
+  "vanity_url_code": "bittensor",
+  "nsfw_level": 0,
+  "premium_subscription_count": 63,
+  "premium_tier": 3
+ },
+ "guild_id": "799672011265015819",
+ "channel": {
+  "id": "830075335084474390",
+  "type": 5,
+  "name": "📣・announce"
+ },
+ "approximate_member_count": 50905,
+ "approximate_presence_count": 5575
+}

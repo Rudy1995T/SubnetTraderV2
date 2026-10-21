@@ -4,6 +4,7 @@ Never 500: every block is built in its own try/except and degrades to ``{"error"
 """
 from __future__ import annotations
 
+import inspect
 import json
 import shutil
 import sqlite3
@@ -126,6 +127,13 @@ async def build_health(rt: "Runtime | None") -> dict:
     out["spend"] = _block(_spend)
     out["rate_limits"] = _block(lambda: rt.limiter.snapshot() if rt.limiter is not None else {})
 
+    if "owner_collect_daily" in rt.jobs or "integrity_features" in rt.jobs:   # Phase 7 (11 §7)
+        try:
+            from app.integrity.health import integrity_health
+            out["integrity"] = await integrity_health(rt)
+        except Exception as exc:  # pragma: no cover
+            out["integrity"] = {"error": f"{type(exc).__name__}: {exc}"}
+
     # db block
     try:
         db = rt.db
@@ -180,7 +188,7 @@ async def build_health(rt: "Runtime | None") -> dict:
     except Exception as exc:
         out["alerts"] = {"error": str(exc)}
 
-    # scores (12's scores_status once scoring exists)
+    # scores (12's scores_status once scoring exists; async since Phase 8)
     def _scores() -> Any:
         try:
             from app.scoring import engine  # type: ignore[attr-defined]
@@ -189,6 +197,13 @@ async def build_health(rt: "Runtime | None") -> dict:
         fn = getattr(engine, "scores_status", None)
         return fn(rt) if fn else None
     out["scores"] = _block(_scores)
+    if inspect.isawaitable(out["scores"]):
+        try:
+            out["scores"] = await out["scores"]
+        except Exception as exc:
+            out["scores"] = {"error": f"{type(exc).__name__}: {exc}"}
+    if isinstance(out["scores"], dict) and out["scores"].get("stale") and s.SCORING_ENABLED:
+        reasons.append("scores_stale")
 
     def _spec_unknown() -> None:
         try:
@@ -255,59 +270,204 @@ async def health() -> JSONResponse:
     return _Compact(await build_health(_rt()))
 
 
-_services_cache: dict[str, tuple[float, dict]] = {}
+# ── /api/health/services (01 Phase-0 subset + spec 14 §3.5 probes) ─────────────────────────────────────────────
+# Active probes make one cheap request through ``Http.request(provider, …)``; passive probes read /health,
+# the limiter/governor snapshot and collector_runs only (no TMC/Discord/X spend). The whole response is cached
+# for HEALTH_SERVICES_CACHE_SEC.
+_services_cache: tuple[float, dict] | None = None
 
 
-async def _probe_telegram() -> dict:
+def _svc(name: str, state: str, detail: str, latency_ms: int | None = None) -> dict:
+    return {"ok": state != "fail", "state": state, "name": name, "detail": detail, "last_check": to_iso(now_ts()),
+            "latency_ms": latency_ms}
+
+
+async def _last_ok(rt: "Runtime", job: str) -> int | None:
+    v = await rt.db.fetchval("SELECT MAX(finished_at) FROM collector_runs WHERE job = ? AND ok = 1", (job,))
+    return None if v is None else int(v)
+
+
+def _ago(ts: int | None) -> str:
+    from app.notifications.format import fmt_age
+    return "never" if ts is None else f"{fmt_age(now_ts() - ts)} ago"
+
+
+async def probe_database(rt: "Runtime") -> dict:
+    t0 = time.monotonic()
+    mode = await rt.db.fetchval("PRAGMA journal_mode", writer=True)
+    latest = await rt.db.fetchval("SELECT MAX(as_of) FROM scores WHERE spec_version = ?",
+                                  (app_config.settings.SPEC_VERSION,))
+    slot = to_iso(latest)[:16] + "Z" if latest else "none"
+    return _svc("SQLite", "ok", f"{str(mode).lower()} · latest slot {slot}", int((time.monotonic() - t0) * 1000))
+
+
+async def probe_scheduler(rt: "Runtime") -> dict:
+    running = bool(rt.scheduler is not None and rt.scheduler.running)
+    det = f"{len(rt.jobs) + len(rt.tasks)} jobs · {len(rt.unavailable)} unavailable"
+    return _svc("APScheduler", "ok" if running else "fail", det if running else f"not running · {det}")
+
+
+async def probe_disk(rt: "Runtime") -> dict:
+    s = app_config.settings
+    free = shutil.disk_usage(s.path(s.DATA_DIR)).free / 2**30
+    return _svc("Disk", "ok" if free >= s.DISK_FREE_MIN_GB else "fail", f"{free:.1f} GB free")
+
+
+async def probe_backup(rt: "Runtime") -> dict:
+    s = app_config.settings
+    if not s.DB_BACKUP_ENABLED:
+        return _svc("Backup", "disabled", "DB_BACKUP_ENABLED=false")
+    from app.storage.backup import latest_backup, latest_backup_age_hours
+    bdir = s.path(s.DB_BACKUP_DIR)
+    lb = latest_backup(bdir)
+    age = latest_backup_age_hours(bdir)
+    raw = await rt.db.fetchval("SELECT value_json FROM job_state WHERE job = 'backup_daily' AND key = 'last_result'")
+    mirror = (json.loads(raw).get("mirror") if raw else None) or "off"
+    ok = age is not None and age <= s.DB_BACKUP_STALE_HOURS and mirror in ("ok", "off")
+    name = (lb or {}).get("name") or "none"
+    det = f"{name} · {age:.1f} h · mirror {mirror}" if age is not None else f"no backup yet · mirror {mirror}"
+    return _svc("Backup", "ok" if ok else "fail", det)
+
+
+async def probe_telegram(rt: "Runtime") -> dict:
     s = app_config.settings
     if not s.telegram_configured():
-        return {"ok": False, "name": "Telegram", "detail": "not configured", "last_check": to_iso(now_ts())}
-    cached = _services_cache.get("telegram")
-    if cached and time.monotonic() - cached[0] < s.HEALTH_SERVICES_CACHE_SEC:
-        return cached[1]
+        return _svc("Telegram", "disabled", "no token / chat id")
     t0 = time.monotonic()
-    try:
-        from app.notifications.telegram import get_me
-        me = await get_me()
-        ok = bool(me.get("ok"))
-        res = {"ok": ok, "name": "Telegram", "detail": f"@{me.get('result', {}).get('username', '?')}" if ok else
-               str(me.get("description", "getMe failed")), "last_check": to_iso(now_ts()),
-               "latency_ms": int((time.monotonic() - t0) * 1000)}
-    except Exception as exc:
-        res = {"ok": False, "name": "Telegram", "detail": f"{type(exc).__name__}", "last_check": to_iso(now_ts())}
-    _services_cache["telegram"] = (time.monotonic(), res)
-    return res
+    from app.notifications.telegram import get_me
+    me = await get_me()
+    ok = bool(me.get("ok"))
+    det = f"@{me.get('result', {}).get('username', '?')}" if ok else str(me.get("description", "getMe failed"))
+    return _svc("Telegram", "ok" if ok else "fail", det, int((time.monotonic() - t0) * 1000))
+
+
+async def probe_github(rt: "Runtime") -> dict:
+    s = app_config.settings
+    if not s.GITHUB_TOKEN:
+        return _svc("GitHub", "disabled", "no GITHUB_TOKEN")
+    from app.http import get_http
+    t0 = time.monotonic()
+    r = await get_http().request("github", "GET", "https://api.github.com/rate_limit", timeout=8, retries=0,
+                                 ok_statuses=(200, 401, 403))
+    lat = int((time.monotonic() - t0) * 1000)
+    if r.status_code != 200:
+        return _svc("GitHub", "fail", f"HTTP {r.status_code}", lat)
+    core = (r.json().get("resources") or {}).get("core") or {}
+    reset = to_iso(core.get("reset"))
+    return _svc("GitHub", "ok", f"{core.get('remaining', '?')}/{core.get('limit', '?')} · resets "
+                f"{reset[11:16] + 'Z' if reset else '?'}", lat)
+
+
+async def probe_subtensor_rpc(rt: "Runtime") -> dict:
+    s = app_config.settings
+    if not s.SUBTENSOR_RPC_ENABLED:
+        return _svc("Subtensor RPC", "disabled", "SUBTENSOR_RPC_ENABLED=false")
+    from app.http import get_http
+    url = s.SUBTENSOR_RPC_URL.replace("wss://", "https://").replace("ws://", "http://")
+    t0 = time.monotonic()
+    r = await get_http().request("subtensor_rpc", "POST", url, timeout=8, retries=0, ok_statuses=(200,),
+                                 json={"jsonrpc": "2.0", "id": 1, "method": "system_health", "params": []})
+    lat = int((time.monotonic() - t0) * 1000)
+    body = r.json()
+    if body.get("error"):
+        return _svc("Subtensor RPC", "fail", str(body["error"])[:120], lat)
+    res = body.get("result") or {}
+    return _svc("Subtensor RPC", "ok", f"peers {res.get('peers', '?')} · syncing "
+                f"{str(res.get('isSyncing', '?')).lower()}", lat)
+
+
+async def probe_anthropic(rt: "Runtime") -> dict:
+    s = app_config.settings
+    if not s.LLM_ENABLED or not s.ANTHROPIC_API_KEY:
+        return _svc("Anthropic", "disabled", "LLM_ENABLED=false" if not s.LLM_ENABLED else "no ANTHROPIC_API_KEY")
+    snap = (rt.costs.snapshot() if rt.costs is not None else {}).get("llm") or {}
+    spend = f"llm ${snap.get('usd', 0):.2f}/${snap.get('cap_usd') or 0:.0f}"
+    if snap.get("paused"):
+        return _svc("Anthropic", "fail", f"budget paused · {spend}")
+    from app.http import get_http
+    t0 = time.monotonic()
+    r = await get_http().request("anthropic", "GET", "https://api.anthropic.com/v1/models", timeout=8, retries=0,
+                                 headers={"x-api-key": s.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
+                                 ok_statuses=(200, 401, 403))
+    lat = int((time.monotonic() - t0) * 1000)
+    return _svc("Anthropic", "ok" if r.status_code == 200 else "fail",
+                f"ok · {spend}" if r.status_code == 200 else f"HTTP {r.status_code}", lat)
+
+
+async def probe_tmc(rt: "Runtime") -> dict:
+    snap = (rt.costs.snapshot() if rt.costs is not None else {}).get("tmc") or {}
+    last = await _last_ok(rt, "tmc_hourly")
+    month = f"month {snap.get('requests', 0):,}/{snap.get('request_cap') or 0:,}"
+    ok = not snap.get("paused") and last is not None and now_ts() - last <= 2 * 3600
+    return _svc("TaoMarketCap REST", "ok" if ok else "fail", f"{month} · last ok {_ago(last)}")
+
+
+async def probe_tmc_sse(rt: "Runtime") -> dict:
+    task = rt.tasks.get("chain_sse")
+    if task is None or not task.enabled():
+        return _svc("TaoMarketCap SSE", "disabled", "chain_sse not running")
+    beat = task.last_beat
+    ok = bool(task.connected and beat is not None and now_ts() - beat <= 120)
+    return _svc("TaoMarketCap SSE", "ok" if ok else "fail",
+                f"{'connected' if task.connected else 'disconnected'} · last beat {_ago(beat)}")
+
+
+async def probe_discord(rt: "Runtime") -> dict:
+    if not app_config.settings.DISCORD_ENABLED:
+        return _svc("Discord", "disabled", "DISCORD_ENABLED=false")
+    last = await _last_ok(rt, "discord_6h")
+    ok = last is not None and now_ts() - last <= 7 * 3600
+    return _svc("Discord", "ok" if ok else "fail", f"last ok {_ago(last)}")
+
+
+async def probe_x(rt: "Runtime") -> dict:
+    s = app_config.settings
+    if s.X_PROVIDER == "null":
+        return _svc("X", "disabled", "X_PROVIDER=null")
+    snap = (rt.costs.snapshot() if rt.costs is not None else {}).get("x") or {}
+    last = await _last_ok(rt, "x_team_poll")
+    ok = not snap.get("paused") and last is not None and now_ts() - last <= 26 * 3600
+    return _svc("X", "ok" if ok else "fail", f"{s.X_PROVIDER} · last ok {_ago(last)} · "
+                f"${snap.get('usd', 0):.2f}/${snap.get('cap_usd') or 0:.0f}")
+
+
+PROBES: dict[str, Callable[["Runtime"], Any]] = {
+    "database": probe_database, "scheduler": probe_scheduler, "disk": probe_disk, "backup": probe_backup,
+    "telegram": probe_telegram, "github": probe_github, "subtensor_rpc": probe_subtensor_rpc,
+    "anthropic": probe_anthropic, "tmc": probe_tmc, "tmc_sse": probe_tmc_sse, "discord": probe_discord, "x": probe_x,
+}
+_NAMES = {"database": "SQLite", "scheduler": "APScheduler", "disk": "Disk", "backup": "Backup",
+          "telegram": "Telegram", "github": "GitHub", "subtensor_rpc": "Subtensor RPC", "anthropic": "Anthropic",
+          "tmc": "TaoMarketCap REST", "tmc_sse": "TaoMarketCap SSE", "discord": "Discord", "x": "X"}
+
+
+async def build_services(rt: "Runtime | None") -> dict:
+    import asyncio
+    s = app_config.settings
+    if rt is None or rt.db is None or not rt.db.connected:
+        return {"timestamp": to_iso(now_ts()), "cached": False,
+                "services": {k: _svc(_NAMES[k], "fail", "runtime not ready") for k in PROBES}}
+
+    async def _one(key: str, fn) -> tuple[str, dict]:
+        try:
+            return key, await asyncio.wait_for(fn(rt), timeout=float(s.HEALTH_PROBE_TIMEOUT_SEC))
+        except Exception as exc:
+            msg = str(exc).replace(s.TELEGRAM_BOT_TOKEN, "***") if s.TELEGRAM_BOT_TOKEN else str(exc)
+            return key, _svc(_NAMES.get(key, key), "fail", f"{type(exc).__name__}: {msg}"[:200])
+    pairs = await asyncio.gather(*(_one(k, f) for k, f in PROBES.items()))
+    return {"timestamp": to_iso(now_ts()), "cached": False, "services": dict(pairs)}
 
 
 @router.get("/api/health/services")
 async def services() -> JSONResponse:
-    rt = _rt()
+    global _services_cache
     s = app_config.settings
-    out: dict[str, dict] = {}
-    t0 = time.monotonic()
-    try:
-        db = rt.db if rt else None
-        if db is None:
-            raise RuntimeError("db not connected")
-        await db.fetchval("SELECT 1")
-        n = await db.fetchval("SELECT COUNT(*) FROM collector_runs")
-        mode = await db.fetchval("PRAGMA journal_mode", writer=True)
-        out["database"] = {"ok": True, "name": "SQLite", "detail": f"{str(mode).upper()} mode, {n} runs",
-                           "last_check": to_iso(now_ts()), "latency_ms": int((time.monotonic() - t0) * 1000)}
-    except Exception as exc:
-        out["database"] = {"ok": False, "name": "SQLite", "detail": str(exc), "last_check": to_iso(now_ts())}
-    running = bool(rt and rt.scheduler and rt.scheduler.running)
-    out["scheduler"] = {"ok": running, "name": "APScheduler",
-                        "detail": f"{len(rt.jobs) if rt else 0} jobs" if running else "not running",
-                        "last_check": to_iso(now_ts())}
-    out["telegram"] = await _probe_telegram()
-    try:
-        free = shutil.disk_usage(s.path(s.DATA_DIR)).free / 2**30
-        out["disk"] = {"ok": free >= s.DISK_FREE_MIN_GB, "name": "Disk", "detail": f"{free:.1f} GB free",
-                       "last_check": to_iso(now_ts())}
-    except OSError as exc:
-        out["disk"] = {"ok": False, "name": "Disk", "detail": str(exc), "last_check": to_iso(now_ts())}
-    return _Compact({"timestamp": to_iso(now_ts()), "services": out})
+    if _services_cache and time.monotonic() - _services_cache[0] < s.HEALTH_SERVICES_CACHE_SEC:
+        return _Compact({**_services_cache[1], "cached": True})
+    body = await build_services(_rt())
+    if _rt() is not None:
+        _services_cache = (time.monotonic(), body)
+    return _Compact(body)
 
 
 @router.get("/api/v1/jobs")

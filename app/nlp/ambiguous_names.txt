@@ -1,0 +1,60 @@
+# Subnet names that are also ordinary words (09 §2.5 AMBIGUOUS_NAMES). A match on one of these needs a Bittensor
+# co-term (bittensor | TAO | subnet | dTAO | netuid | SNnn) — in match_occupants and as required_coterms in mention
+# search. Names of ≤ 4 characters are ambiguous without being listed. One name per line, compared case-insensitively.
+# Seeded 2026-10-18 from the live registry (dictionary words + the spec's curated list); regenerate with
+# `python -m scripts.build_kol_list --names` (keeps hand-added lines).
+Actual
+Affine
+Almanac
+Apex
+Attune
+Aurelius
+Base
+Beam
+Carbon
+cascade
+Cathedral
+Claims
+conjectures
+Cortex
+Data Universe
+Ditto
+Dojo
+Endure Network
+Enigma
+Forge
+Gradients
+Grail
+Graphite
+Green Compute
+Herald
+Hone
+Ingot
+Instant
+Investing
+Its AI
+ItsAI
+Liquidity
+MANTIS
+Minos
+Noah
+Nova
+Orion
+Perturb
+Quantum Compute
+Quasar
+Ralph
+Refinery
+Ridges
+Score
+SOMA
+Swarm
+Synth
+Templar
+Teutonic
+Thirty Spokes
+THOR
+Vanta
+Witness
+Zero Hour
+Zeus

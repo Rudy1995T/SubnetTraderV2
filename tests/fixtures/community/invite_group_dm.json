@@ -1,0 +1,13 @@
+{
+ "type": 1,
+ "code": "gdmInv",
+ "expires_at": null,
+ "channel": {
+  "id": "1",
+  "type": 3
+ },
+ "inviter": {
+  "id": "2",
+  "username": "someone"
+ }
+}

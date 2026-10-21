@@ -3,6 +3,8 @@
 data/
 seed/*
 !seed/*.example
+!seed/kol_accounts.csv
+!seed/feeds.csv
 KILL_SWITCH
 PAUSE_ALL
 SCORING_KILLED
@@ -11,3 +13,22 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+
+# secrets and local-only files
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+wallets/
+coldkey
+coldkeypub.txt
+hotkeys/
+.claude/settings.local.json
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log

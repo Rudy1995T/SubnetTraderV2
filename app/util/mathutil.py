@@ -1,32 +1,39 @@
-"""Pure-stdlib math helpers (A2: the only math-util module; imported by 05, 11, 12, 13).
+"""Pure-stdlib math helpers (A2: the only math-util module; imported by 05, 11, 12, 13, 19).
 
-Port of the old SubnetTrader ``app/utils/math.py`` 1-177 (the source was not available on the
-laptop at build time; re-implemented from the documented signatures and test expectations —
-see specs/BUILD-LOG.md) plus ``monotone_score`` for spec 13.
+Verbatim port of the old SubnetTrader ``app/utils/math.py`` 1-177 (source: ``seed/app/utils/math.py``; spec 12 §8.1,
+§8.2). Phase 2 had re-implemented it without the source; Phase 8 replaced that with the original functions
+(0-based ``_average_ranks``, ``pearson_r``/``spearman_r`` 0.0 below n = 5, tail alignment, annualised
+``rolling_volatility``). ``compute_price_changes`` (178-239, wall-clock dependent) is not ported. Spec 13 appends
+``monotone_score``.
 """
 from __future__ import annotations
 
 import math
+import statistics
 
 
 def pearson_r(xs: list[float], ys: list[float]) -> float:
-    """Pearson correlation; 0.0 for fewer than 2 pairs or zero variance."""
+    """Pearson correlation coefficient between two equal-length price series.
+
+    Returns 0.0 if series are too short or have zero variance.
+    """
     n = min(len(xs), len(ys))
-    if n < 2:
+    if n < 5:
         return 0.0
-    xs, ys = xs[:n], ys[:n]
+    xs, ys = xs[-n:], ys[-n:]
     mx = sum(xs) / n
     my = sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    syy = sum((y - my) ** 2 for y in ys)
-    if sxx <= 0 or syy <= 0:
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    da = math.sqrt(sum((x - mx) ** 2 for x in xs))
+    db = math.sqrt(sum((y - my) ** 2 for y in ys))
+    if da == 0 or db == 0:
         return 0.0
-    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    return sxy / math.sqrt(sxx * syy)
+    return num / (da * db)
 
 
 def _average_ranks(xs: list[float]) -> list[float]:
-    """1-based ranks with ties sharing the average rank."""
+    """0-based ranks with ties sharing their average rank (the rank a Spearman
+    correlation expects)."""
     order = sorted(range(len(xs)), key=lambda i: xs[i])
     ranks = [0.0] * len(xs)
     i = 0
@@ -34,101 +41,150 @@ def _average_ranks(xs: list[float]) -> list[float]:
         j = i
         while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
             j += 1
-        avg = (i + j) / 2.0 + 1.0
+        shared = (i + j) / 2.0
         for k in range(i, j + 1):
-            ranks[order[k]] = avg
+            ranks[order[k]] = shared
         i = j + 1
     return ranks
 
 
 def spearman_r(xs: list[float], ys: list[float]) -> float:
-    """Spearman rank correlation (Pearson on average ranks)."""
+    """Spearman rank correlation — Pearson r on the average-ranked inputs.
+
+    Returns 0.0 for series shorter than 5 (delegated to ``pearson_r``) or with
+    no rank variance (all tied).
+    """
     n = min(len(xs), len(ys))
-    if n < 2:
+    if n < 5:
         return 0.0
-    return pearson_r(_average_ranks(list(xs[:n])), _average_ranks(list(ys[:n])))
+    return pearson_r(_average_ranks(xs[:n]), _average_ranks(ys[:n]))
 
 
 def zscore(xs: list[float]) -> list[float]:
-    """Population z-scores; all zeros when the standard deviation is 0."""
+    """Standardize a series to zero mean / unit (sample) std.
+
+    Returns all-zeros for length < 2 or zero variance.
+    """
     n = len(xs)
-    if n == 0:
-        return []
-    m = sum(xs) / n
-    var = sum((x - m) ** 2 for x in xs) / n
-    if var <= 0:
+    if n < 2:
         return [0.0] * n
+    m = sum(xs) / n
+    var = sum((x - m) ** 2 for x in xs) / (n - 1)
     sd = math.sqrt(var)
+    if sd == 0:
+        return [0.0] * n
     return [(x - m) / sd for x in xs]
 
 
 def quantile_buckets(values: list[float], n: int = 10) -> list[int]:
-    """Assign each value a bucket 0..n-1 by rank (equal-count buckets, ties by position)."""
+    """Assign each value an equal-count bucket index in ``[0, n-1]`` by rank.
+
+    Lowest values land in bucket 0, highest in bucket ``n-1``. Ties are broken
+    by position (stable sort), so a heavily-tied series still spreads across
+    buckets without crashing. Robust to ``len(values) < n``.
+    """
     m = len(values)
     if m == 0:
         return []
     order = sorted(range(m), key=lambda i: values[i])
-    out = [0] * m
-    for pos, idx in enumerate(order):
-        out[idx] = min(n - 1, pos * n // m)
-    return out
+    buckets = [0] * m
+    for rank, idx in enumerate(order):
+        b = rank * n // m
+        buckets[idx] = b if b < n else n - 1
+    return buckets
 
 
 def log_returns(prices: list[float]) -> list[float]:
-    """ln(p_t / p_{t-1}); pairs with a non-positive price are skipped."""
-    out = []
-    for a, b in zip(prices, prices[1:]):
-        if a and b and a > 0 and b > 0:
-            out.append(math.log(b / a))
-    return out
+    """Log-returns of a chronological price series (drops non-positive steps)."""
+    return [
+        math.log(prices[i] / prices[i - 1])
+        for i in range(1, len(prices))
+        if prices[i - 1] > 0 and prices[i] > 0
+    ]
 
 
 def returns_pearson_r(xs: list[float], ys: list[float]) -> float:
-    """Pearson correlation of the log-return series of two aligned price series."""
+    """Pearson r of two price series' log-returns (0.0 if too short).
+
+    Returns are the statistically correct input for "do these move together":
+    the level correlation of two independently-trending series is spuriously
+    high. The two series are tail-aligned to a common length *before*
+    differencing so their return streams stay time-aligned.
+    """
     n = min(len(xs), len(ys))
-    rx, ry = [], []
-    for i in range(1, n):
-        a0, a1, b0, b1 = xs[i - 1], xs[i], ys[i - 1], ys[i]
-        if a0 > 0 and a1 > 0 and b0 > 0 and b1 > 0:
-            rx.append(math.log(a1 / a0))
-            ry.append(math.log(b1 / b0))
-    return pearson_r(rx, ry)
+    if n < 6:  # need >= 5 returns, i.e. >= 6 prices
+        return 0.0
+    rx, ry = log_returns(xs[-n:]), log_returns(ys[-n:])
+    m = min(len(rx), len(ry))
+    if m < 5:
+        return 0.0
+    return pearson_r(rx[-m:], ry[-m:])
 
 
 def effective_bets(avg_corr: float, n: int) -> float:
-    """Effective number of independent bets: n / (1 + (n-1)·ρ̄), clamped to [1, n]."""
-    if n <= 0:
-        return 0.0
-    rho = max(0.0, min(1.0, avg_corr))
-    eff = n / (1.0 + (n - 1) * rho)
-    return max(1.0, min(float(n), eff))
+    """Effective number of independent bets under an equicorrelation model.
+
+    ENB = n / (1 + (n-1)*avg_corr). avg_corr=0 -> n (fully diversified);
+    avg_corr=1 -> 1 (one bet). A maximally-hedged book (avg_corr negative enough
+    that the denominator <= 0) is more diversified than n independent bets, so
+    return +inf rather than dividing by zero or going negative.
+    """
+    if n <= 1:
+        return float(n)
+    denom = 1.0 + (n - 1) * avg_corr
+    if denom <= 0:
+        return float("inf")
+    return n / denom
 
 
 def rolling_volatility(prices: list[float], window: int = 24) -> float | None:
-    """Sample standard deviation of the last ``window`` log returns; None when too few."""
-    rets = log_returns(prices[-(window + 1):])
-    if len(rets) < 2:
+    """Annualized volatility from a price series.
+
+    Args:
+        prices: chronological prices (e.g. 4h candles over 7 days = ~42 points)
+        window: lookback window in data points (default 24 = ~4 days at 4h)
+
+    Returns:
+        Annualized volatility as a decimal (e.g. 0.45 = 45%), or None if
+        insufficient data.
+    """
+    if len(prices) < window + 1:
         return None
-    m = sum(rets) / len(rets)
-    var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
-    return math.sqrt(var)
+    recent = prices[-window - 1:]
+    log_returns = [
+        math.log(recent[i] / recent[i - 1])
+        for i in range(1, len(recent))
+        if recent[i - 1] > 0
+    ]
+    if len(log_returns) < 5:
+        return None
+    std_dev = statistics.stdev(log_returns)
+    # Annualize: assume 4h candles → 6 per day → 2190 per year
+    return std_dev * math.sqrt(2190)
 
 
 def gini_coefficient(values: list[float]) -> float:
-    """Gini of the positive values (non-positive ignored); 0.0 for empty or all-equal input."""
-    xs = sorted(v for v in values if v is not None and v > 0)
-    n = len(xs)
+    """Gini coefficient (0 = equal, 1 = one holder dominates).
+
+    Expects a list of positive stake/balance values.
+    """
+    vals = sorted(v for v in values if v > 0)
+    n = len(vals)
     if n == 0:
         return 0.0
-    total = sum(xs)
-    if total <= 0:
+    total = sum(vals)
+    if total == 0:
         return 0.0
-    cum = sum((i + 1) * x for i, x in enumerate(xs))
-    return (2.0 * cum) / (n * total) - (n + 1.0) / n
+    cum = 0.0
+    gini_sum = 0.0
+    for i, v in enumerate(vals):
+        cum += v
+        gini_sum += (2 * (i + 1) - n - 1) * v
+    return gini_sum / (n * total)
 
 
 def monotone_score(curve: list[float | None]) -> float:
-    """Spearman of position vs value over the non-None entries; fewer than 5 points → 0.0."""
+    """Spearman of position vs value over the non-None entries; fewer than 5 points → 0.0 (spec 13)."""
     pts = [(i, v) for i, v in enumerate(curve) if v is not None]
     if len(pts) < 5:
         return 0.0

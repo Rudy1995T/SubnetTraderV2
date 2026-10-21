@@ -1,0 +1,20 @@
+{
+ "type": 0,
+ "code": "Tag101",
+ "expires_at": null,
+ "guild": {
+  "id": "1419378005230485587",
+  "name": "Tag101",
+  "features": [
+   "COMMUNITY"
+  ],
+  "verification_level": 1
+ },
+ "channel": {
+  "id": "1419378005700000000",
+  "type": 0,
+  "name": "》rules"
+ },
+ "approximate_member_count": 1905,
+ "approximate_presence_count": 9
+}

@@ -147,10 +147,14 @@ def pytest_collection_modifyitems(config, items):
 
 
 # Built so far (spec 01 §2.7 "declared vs available"); bump when a phase lands.
-BUILT_PHASE = 4
-# 3+: 19 workbench rows; 4 = 26 until 17's manual backfill_github (S9, run after the Phase 4 verify) lands → 27
-AVAILABLE_BY_PHASE = {0: 7, 1: 9, 2: 16, 3: 21, 4: 26, 5: 30, 6: 34, 7: 39, 8: 41, 9: 53, 10: 54, 11: 57}
-EXPECTED_AVAILABLE = AVAILABLE_BY_PHASE[BUILT_PHASE]
+BUILT_PHASE = 11
+# 3+: 19 workbench rows; 4 = 26, 5 = 29, 6 = 33, 7 = 38, 8 = 40 and 9 = 52 (09's 8 + 10's 4 jobs) until 17's manual
+# backfill_github (S9, run after the Phase 4 verify) lands → 27 / 30 / 34 / 39 / 41 / 53; 10 = 53 (13's quant_weekly) → 54;
+# 11 = 56 (14's dereg_watch, needs_review_digest, telegram_bot) → 57
+AVAILABLE_BY_PHASE = {0: 7, 1: 9, 2: 16, 3: 21, 4: 26, 5: 29, 6: 33, 7: 38, 8: 40, 9: 52, 10: 53, 11: 56}
+# Jobs of later phases built ahead of order at the operator's request (13 built 2026-10-17, 13 §11 item 15).
+EARLY_JOBS: frozenset[str] = frozenset()      # was {"quant_weekly"} until Phase 9 closed the gap (2026-10-18)
+EXPECTED_AVAILABLE = AVAILABLE_BY_PHASE[BUILT_PHASE] + sum(1 for _ in EARLY_JOBS)
 
 
 def spec_path(name: str) -> Path:

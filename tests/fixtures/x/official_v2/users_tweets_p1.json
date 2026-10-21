@@ -1,0 +1,117 @@
+{
+ "_synthetic": true,
+ "_note": "synthetic, shaped per spec 09 §2.3 vendor-doc field names (UNVERIFIED); replace via scripts/record_x_fixtures.py",
+ "data": [
+  {
+   "id": "2111427000529846272",
+   "text": "Chutes v3 is live on SN64",
+   "created_at": "2026-10-17T12:00:00.000Z",
+   "lang": "en",
+   "author_id": "1700000000000000001",
+   "conversation_id": "2111427000529846272",
+   "public_metrics": {
+    "retweet_count": 3,
+    "reply_count": 1,
+    "like_count": 12,
+    "quote_count": 1,
+    "impression_count": 1500
+   },
+   "entities": {
+    "urls": [
+     {
+      "expanded_url": "https://chutes.ai"
+     }
+    ]
+   }
+  },
+  {
+   "id": "2111351503057846273",
+   "text": "@someone thanks!",
+   "created_at": "2026-10-17T07:00:00.000Z",
+   "lang": "en",
+   "author_id": "1700000000000000001",
+   "conversation_id": "2111351503057846273",
+   "public_metrics": {
+    "retweet_count": 3,
+    "reply_count": 1,
+    "like_count": 12,
+    "quote_count": 1,
+    "impression_count": 1500
+   },
+   "referenced_tweets": [
+    {
+     "type": "replied_to",
+     "id": "2111336403563446274"
+    }
+   ]
+  },
+  {
+   "id": "2111291105080246274",
+   "text": "look at this",
+   "created_at": "2026-10-17T03:00:00.000Z",
+   "lang": "en",
+   "author_id": "1700000000000000001",
+   "conversation_id": "2111291105080246274",
+   "public_metrics": {
+    "retweet_count": 3,
+    "reply_count": 1,
+    "like_count": 12,
+    "quote_count": 1,
+    "impression_count": 1500
+   },
+   "referenced_tweets": [
+    {
+     "type": "quoted",
+     "id": "2111064612664246277"
+    }
+   ],
+   "attachments": {
+    "media_keys": [
+     "3_1"
+    ]
+   }
+  },
+  {
+   "id": "2111245806597046275",
+   "text": "RT @x: hi",
+   "created_at": "2026-10-17T00:00:00.000Z",
+   "lang": "en",
+   "author_id": "1700000000000000001",
+   "conversation_id": "2111245806597046275",
+   "public_metrics": {
+    "retweet_count": 3,
+    "reply_count": 1,
+    "like_count": 12,
+    "quote_count": 1,
+    "impression_count": 1500
+   },
+   "referenced_tweets": [
+    {
+     "type": "retweeted",
+     "id": "2111064612664246278"
+    }
+   ]
+  },
+  {
+   "id": "2111125010641846276",
+   "text": "weekly update",
+   "created_at": "2026-10-16T16:00:00.000Z",
+   "lang": "en",
+   "author_id": "1700000000000000001",
+   "conversation_id": "2111125010641846276",
+   "public_metrics": {
+    "retweet_count": 3,
+    "reply_count": 1,
+    "like_count": 12,
+    "quote_count": 1,
+    "impression_count": 1500
+   }
+  }
+ ],
+ "meta": {
+  "newest_id": "2111427000529846272",
+  "oldest_id": "2111125010641846276",
+  "result_count": 5,
+  "next_token": "7140dibdnow9c7btw3w29grvxfcgvpb9n9coehpk7xz5i"
+ }
+}

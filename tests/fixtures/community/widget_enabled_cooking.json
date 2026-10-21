@@ -1,0 +1,22 @@
+{
+ "id": "692175473198759938",
+ "name": "Cooking",
+ "instant_invite": "https://discord.com/invite/cookInv",
+ "channels": [
+  {
+   "id": "1",
+   "name": "General",
+   "position": 0
+  }
+ ],
+ "members": [
+  {
+   "id": "0",
+   "username": "alice",
+   "avatar": null,
+   "status": "online",
+   "avatar_url": "https://cdn.discordapp.com/widget-avatars/x"
+  }
+ ],
+ "presence_count": 1311
+}

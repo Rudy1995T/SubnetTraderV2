@@ -77,7 +77,7 @@ def clip(x: float, lo: float, hi: float) -> float:
 
 
 def pct_rank(values: dict[Any, float]) -> dict[Any, float]:
-    """Cross-sectional percentile rank (r−1)/(n−1) with average ties; n = 1 → 0.5."""
+    """Cross-sectional percentile rank r0/(n−1) (0-based average ranks, ties shared); n = 1 → 0.5."""
     keys = list(values)
     if not keys:
         return {}
@@ -85,7 +85,7 @@ def pct_rank(values: dict[Any, float]) -> dict[Any, float]:
         return {keys[0]: 0.5}
     ranks = _average_ranks([values[k] for k in keys])
     n = len(keys)
-    return {k: (r - 1) / (n - 1) for k, r in zip(keys, ranks)}
+    return {k: r0 / (n - 1) for k, r0 in zip(keys, ranks)}
 
 
 @dataclass

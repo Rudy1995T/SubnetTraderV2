@@ -84,6 +84,7 @@ class JobSpec:
     liveness_max_age_sec: int | None = None
     fail_alert_threshold: int | None = None
     fail_alert_key: str | None = None
+    timeout_key: str | None = None        # Settings key overriding timeout_sec at run time (13 §8.8)
     trigger_desc: str = ""
 
 
@@ -330,7 +331,8 @@ JOB_TABLE: tuple[JobSpec, ...] = (
     # Phase 10 — 13
     J("quant_weekly", "13", "quant.weekly_job:QuantWeeklyJob", "cron", 10, weekly_at("QUANT_WEEKLY_JOB_CRON"),
       ("QUANT_ENABLED", "QUANT_WEEKLY_JOB_ENABLED"), misfire_grace_sec=3600, timeout_sec=1800, min_gap_factor=0,
-      fail_alert_key="QUANT_ALERT_AFTER_FAILURES", trigger_desc="Sun 05:00Z"),
+      fail_alert_key="QUANT_ALERT_AFTER_FAILURES", timeout_key="QUANT_WEEKLY_JOB_TIMEOUT_S",
+      trigger_desc="Sun 05:00Z"),
     # Phase 11 — 14
     J("dereg_watch", "14", "notifications.watch:DeregWatchJob", "interval", 11,
       every("DEREG_WATCH_INTERVAL_MIN", "min"), ("DEREG_WATCH_ENABLED",), misfire_grace_sec=600, timeout_sec=120,
@@ -483,6 +485,12 @@ class CollectorJob(ABC):
             return max(1, int(self.spec.fail_alert_threshold))
         return max(1, int(s.JOB_FAIL_ALERT_THRESHOLD))
 
+    def effective_timeout(self) -> int | None:
+        """``timeout_key``'s setting when the spec names one (live config), else the static ``timeout_sec``."""
+        if self.spec.timeout_key:
+            return max(1, int(getattr(app_config.settings, self.spec.timeout_key)))
+        return self.spec.timeout_sec
+
     @abstractmethod
     async def collect(self, run: RunContext) -> JobOutcome: ...
 
@@ -549,7 +557,7 @@ class CollectorJob(ABC):
         ctx = RunContext(run_id=run_id, started_at=started, trigger=trigger, rt=self.rt,
                          settings=app_config.settings, log=logger)
         try:
-            outcome = await asyncio.wait_for(self.collect(ctx), timeout=self.spec.timeout_sec)
+            outcome = await asyncio.wait_for(self.collect(ctx), timeout=self.effective_timeout())
         except asyncio.CancelledError:
             st.running = False
             raise
@@ -565,7 +573,7 @@ class CollectorJob(ABC):
                 st.last_skip_reason = None
                 logger.info(f"{self.id} ended on budget", data={"note": note})
             else:
-                err = ("timeout after %ss" % self.spec.timeout_sec) if isinstance(exc, asyncio.TimeoutError) \
+                err = ("timeout after %ss" % self.effective_timeout()) if isinstance(exc, asyncio.TimeoutError) \
                     else f"{type(exc).__name__}: {exc}"
                 err = err[:500]
                 st.last_error = err

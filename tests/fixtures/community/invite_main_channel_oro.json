@@ -1,0 +1,20 @@
+{
+ "type": 0,
+ "code": "oroInv15",
+ "expires_at": null,
+ "guild": {
+  "id": "799672011265015819",
+  "name": "Bittensor",
+  "features": [
+   "COMMUNITY"
+  ],
+  "verification_level": 4
+ },
+ "channel": {
+  "id": "1466080859164643389",
+  "type": 0,
+  "name": "15・oro・ο"
+ },
+ "approximate_member_count": 50905,
+ "approximate_presence_count": 5575
+}

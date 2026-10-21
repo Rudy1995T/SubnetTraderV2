@@ -1,0 +1,3 @@
+{"id": "1", "polarity": "bearish", "intensity": 3, "event_type": "governance_dispute", "direction": -1, "materiality": 2,
+ "entities": [{"netuid": 24, "confidence": 1.0}], "is_spam": false, "is_promo": false,
+ "summary": "SN24 dispute with validators; claims not verifiable", "confidence": 0.7}

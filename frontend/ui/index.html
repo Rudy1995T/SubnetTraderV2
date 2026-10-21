@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TaoSentinel</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%232a78d6'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/ui/static/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/matrix" data-nav>TaoSentinel</a>
+  <nav>
+    <a href="/ui/matrix" data-nav data-view="matrix">Matrix</a>
+    <a href="/ui/events" data-nav data-view="events">Events</a>
+    <a href="/wb">Workbench</a>
+  </nav>
+  <span class="spacer"></span>
+  <button type="button" id="token-btn" class="link-btn" title="API token for forms (kept in this browser)">token</button>
+  <span id="health-dot" class="dot dot-grey" title="health: loading"></span>
+</header>
+<div id="token-panel" class="token-panel" hidden>
+  <label>API token <input id="token-input" type="password" autocomplete="off" placeholder="X-Auth-Token"></label>
+  <button type="button" id="token-save">Save</button>
+  <button type="button" id="token-clear" class="secondary">Clear</button>
+  <span class="muted">Stored in this browser only; sent as <code>X-Auth-Token</code> on form submits.</span>
+</div>
+<main id="app" aria-live="polite"><p class="muted">Loading…</p></main>
+<script src="/ui/static/app.js"></script>
+</body>
+</html>

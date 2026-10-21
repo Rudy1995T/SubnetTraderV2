@@ -92,6 +92,12 @@ PROVIDERS: tuple[str, ...] = (
 )
 
 
+# Providers that front many unrelated hosts: Retry-After stays per host (capped), x-ratelimit-* never penalises the
+# whole bucket (07 §2.1).
+MULTI_HOST_PROVIDERS = frozenset({"web"})
+MULTI_HOST_MAX_COOLDOWN_SEC = 3600.0
+
+
 def limits_from_settings() -> dict[str, ProviderLimit]:
     s = app_config.settings
     gh_token = bool(s.GITHUB_TOKEN)
@@ -248,8 +254,15 @@ class ProviderLimiter:
 
     def penalize_host(self, provider: str, host: str, seconds: float) -> None:
         self._lim(provider)
+        if provider in MULTI_HOST_PROVIDERS:
+            seconds = min(seconds, MULTI_HOST_MAX_COOLDOWN_SEC)
         key = (provider, host or "")
         self._host_until[key] = max(self._host_until.get(key, 0.0), self._mono() + max(0.0, seconds))
+
+    def host_cooldown(self, provider: str, host: str) -> float:
+        """Seconds left on a per-host cooldown (``Retry-After``); 0.0 when none (07 skips such hosts per run)."""
+        left = self._host_until.get((provider, host or ""), 0.0) - self._mono()
+        return left if left > 0 else 0.0
 
     def observe(self, provider: str, headers: Mapping[str, str], *, host: str | None = None) -> None:
         h = {k.lower(): v for k, v in headers.items()}
@@ -264,6 +277,8 @@ class ProviderLimiter:
                 except (TypeError, ValueError, IndexError, OverflowError):
                     secs = 60.0
             self.penalize_host(provider, host or "", secs)
+        if provider in MULTI_HOST_PROVIDERS:     # one site's quota headers must not stall every site (07 §2.1)
+            return
         rem = h.get("x-ratelimit-remaining") or h.get("x-rate-limit-remaining")
         reset = h.get("x-ratelimit-reset") or h.get("x-rate-limit-reset")
         if rem is not None and reset is not None:

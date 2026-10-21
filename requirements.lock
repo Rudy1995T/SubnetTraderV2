@@ -10,9 +10,11 @@ APScheduler==3.11.3
 attrs==26.1.0
 babel==2.18.0
 certifi==2026.7.22
+cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.5.0
 courlan==1.4.0
+cryptography==46.0.7
 dateparser==1.4.3
 discord.py==2.7.1
 docstring_parser==0.18.0
@@ -38,6 +40,7 @@ opentelemetry-api==1.45.1
 packaging==26.3
 pluggy==1.6.0
 propcache==0.5.4
+pycparser==3.11
 pydantic==2.13.5
 pydantic_core==2.46.5
 pydantic-settings==2.15.0

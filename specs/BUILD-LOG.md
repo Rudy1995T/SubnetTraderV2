@@ -640,3 +640,655 @@ check` → 57 declared, 26 available (phase 4); live schema now 4 (`quick_check 
 - `.env` also has `GITHUB_REPO=https://github.com/Rudy1995T/SubnetTraderV2.git` (empty public repo, operator has admin);
   no 06 code uses it — waiting for the operator to say what it is for (16's deploy repo?). Nothing was pushed.
 - 17's `backfill_github` (S9) after the Phase 4 verify.
+
+## 2026-10-17 — Phase 5: spec 07 web presence collector (reviewed, built, verified live)
+
+**Spec review first** (07 Changelog "2026-10-17 pre-build review"; 01 §2.12 rule 6/9 updated), checked against the built
+01/03/04 code, the live registry and live archive.org:
+- **Bug — due rule:** interval-only watermark (`event_at > now − 23.5 h`) made a URL checked at 00:10Z due again at
+  23:40Z the same UTC day; the row hits `UNIQUE (…, check_day_ts)` and is dropped, so the URL was re-fetched every tick
+  until midnight. Due now also requires no row for today.
+- **Bug — docs candidates never retired:** 04 §2.9 explicitly never retires `web_autodiscover` rows, so the spec's
+  `last_seen_at` refresh protected nothing. 07 now owns the lifecycle (revive on re-insert — the unique index spans
+  retired rows —, retire on a changed candidate, on a declared docs row, after 14 d unlinked on an up parsed page).
+- **Availability fallback dropped:** live, `archive.org/wayback/available` answers `{"archived_snapshots": {}}` for
+  archived URLs (`macrocosmos.ai/`, even `example.com`), with or without `timestamp`. The CDX `www.` retry is dropped
+  (SURT verified: `url=macrocosmos.ai/` returns the `www.` captures). CDX JSON shape verified.
+- **Host exclusions from live data:** `vimeo.com` was the *resolved* website of 9 occupants and appears in 17 website rows
+  (subnetalpha intro-video links — **a 04 finding**: the subnetalpha video field lands in `subnet_url`), plus 2
+  `huggingface.co` model pages. Added with `youtu.be`, `discordapp.com`, `telegram.me`. Root netuid 0 excluded (06/12).
+- **False positives designed out:** scam keywords count only when new versus the previous text; `connect your wallet` /
+  `claim your reward` dropped (dapp copy + a redesign's `content_reset` would have paged as `site_hijack_suspect`).
+- **Network gate:** re-probes before blaming our network; suspect rows are no longer written (stay due) — the old rule
+  would also have tripped forever on a batch of genuinely dead sites.
+- TLS by a verified (certifi) handshake + unverified read only after a verification error; reasons
+  `expired/hostname_mismatch/expiring/untrusted/tls_fail/no_tls`. Spec §9's `DDDTDDDD` example contradicted §2.4's
+  timeout rule (fixed). Q15 (01 `Http` gaps) closed: the built `Http` already had the body cap, chained errors and
+  per-host `Retry-After`; added `extensions["elapsed_ms"]`, `ProviderLimiter.host_cooldown()`, and `web` no longer takes
+  provider-wide `x-ratelimit-*` penalties (`MULTI_HOST_PROVIDERS`, cooldown cap 3,600 s).
+- Deps: `tld` (already installed via trafilatura → courlan; offline PSL, `search_private=False`) instead of `tldextract`;
+  trafilatura's vendored `readability_lxml` instead of `readability-lxml`; **`cryptography==46.0.7` is the only new
+  install** (+ `cffi`, `pycparser`), pinned in `pyproject.toml` and `requirements.lock`.
+- Config: the five `WEB_*` list defaults (empty since Phase 0) filled; §5 range validators added; `WEB_USER_AGENT`
+  default no longer sends the literal `<operator>` placeholder URL. No new keys (inventory stays 655).
+
+**Built:** `app/collectors/web/` — `classify, content, fetch, robots, wayback, check, jobs, cli` (+ `__main__`);
+`app/features/web_metrics.py` (six C5 fns, cached loader, pure core, streak events, writer); `app/features/types.py`
+(12's `MetricResult`, created ahead of 12). The three JOB_TABLE rows are available: `python -m app check` → 57 declared,
+**29 available (phase 5)**, `quick_check=ok`; `tests/conftest.py BUILT_PHASE = 5`, `AVAILABLE_BY_PHASE[5] = 29`
+(30 once 17's `backfill_github` lands).
+
+**Found by the live run and fixed:** `taos.im` answers the collector (not curl) with WordPress.com's a8c-cdn
+"Checking your browser… Javascript required" 403 — counted as down; vendor-neutral challenge markers added (§2.5.3), now
+`bot_challenge`. `tls_ok` reason preferred `tls_fail` over `expired` for a cert that GET refused (chronollm).
+
+**Live verification (spec §10, 2026-10-17 ~18:30Z; CLI in-process, service still on old code):**
+- Item 2 `--once --netuid 64 --force`: `https://chutes.ai` `up_2xx`, TLS 32 d (Google Trust Services), 300 ms,
+  Wayback first capture 2024-06-21, docs candidate `chutes.ai/docs/getting-started/quickstart`.
+- Item 3 full pass: 155 URLs in **481 s**, 161 rows, 0 internal errors, no network suspect.
+- Item 4: 162 rows today, `up_2xx`+`redirect_ok` **92.6 %**; 4 `dns_fail` (taohash.ai, scorepredict.io,
+  dojo.tensorplex.ai, bitsota.ai), 4 `client_error` (two 402 = Vercel payment-paused silxinc.com, 404s), 2 `server_error`
+  (Cloudflare 530), 1 `tls_fail`, 1 `bot_challenge`.
+- Item 5: Wayback answered for 115/115 primary sites, capture found for **97 (84 %)**; `targon.com` reports 2000-04-08
+  (the domain's previous owner — §11 Q3 limitation).
+- Item 6: **56** `web_autodiscover` docs rows (unverified candidates; a few are whitepaper PDFs, which §2.3 counts).
+- Items 11/12: 5 `site_cross_domain_redirect` (e.g. hotfloat.io → coldint.io, stakingalpha.com → investing88.ai,
+  discord.hippius.com → a Discord invite — a secondary target), 1 `tls_expiring_14d` (`chronollm.crunchdao.com`, SN38,
+  cert **expired 13 d ago** — the dking.bot-style red flag). `http://winnertao.com` (SN72 second site) has a cert on 443
+  that expired 1,751 d ago (`tls_ok=0`; no event: not the primary).
+- Item 7 previewed print-only with `--metrics --as-of 2026-10-18` (no rows written, so tomorrow's first-success slot is
+  untouched): `site_uptime_30d` `failed insufficient_checks` 115 / `absent no_website` 13 (excluded-only, mostly vimeo);
+  `tls_ok` ok 114; `site_age` ok 115; `site_freshness` ok 96 (12 `spa_shell`); `docs_present` ok 3 / **absent
+  `no_docs_link` 50** / `docs_undetermined` 62 (candidates inserted today, not yet checked); `product_status` unset 128.
+- Not run yet: items 8–10, 13–14 (need the restarted service and further days); item 1 below.
+
+**Tests:** 82 new in `tests/collectors/web/` and `tests/features/test_web_metrics.py` (§10 item 1: ≥ 60 ✓, ≈ 30 s ✓) → `pytest` **488 passed**.
+
+**Open:**
+- **Restart needed:** `sudo systemctl restart taosentinel`. Today's URLs are not due again until 00:00Z; the next ticks
+  check the 56 new docs candidates; the first official P3 rows come from the 00:05Z `web_metrics` run.
+- 07 §11 Q7 **settled by the operator (2026-10-17): keep** — the 50 occupants whose landing page links no docs get
+  `docs_present = 0.0` (`absent no_docs_link`).
+- **04 finding (traced 2026-10-17):** subnetalpha's `video_url_*` fields hold Vimeo links. 04's classifier only knows
+  YouTube as a video host, so a Vimeo URL is classed `ref_kind='website'`. It becomes the resolved winner of the
+  **`youtube`** field for 11 occupants (SN1, 4, 9, 12, 13, 19, 22, 32, 39, 44, 56) and the watch builder maps any
+  `ref_kind='website'` winner to a `platform='website'` row with `is_resolved=1`; the same links are also written as
+  `subnet_url__extra_*` secondaries (17 active website rows). SN39 ("deprecated") has a Vimeo link as its resolved
+  `subnet_url`. 07 excludes `vimeo.com`; the 04 fix (classify video hosts as video, never as website) is open.
+- Optional: append a contact URL to `WEB_USER_AGENT` in `.env` (§11 Q9). sqlite3 CLI still missing for the §10 commands.
+
+## 2026-10-17 — Phase 6: spec 08 community collector (reviewed, built, verified live)
+
+**Spec review first** (08 Changelog "2026-10-17 pre-build review + build"), checked against the built 01/03/04 code,
+the live registry and live probes of discord.com / t.me (≈ 20 keyless requests):
+- **Event type:** 08 still said the gateway's fatal error reuses `collector_failing` and that no gateway type exists;
+  02 §D1 (amended 2026-09-23), 03's catalog and 14's routing already define **`discord_gateway_fatal`**. Now used
+  (state persisted in `job_state`, so a restart stays idle until the token changes); recovery → `collector_recovered`.
+- **Bug — CSV retirement after restart:** the per-run `last_seen_at` touch walked an in-memory map that is empty after
+  a restart while the CSV mtime is unchanged → 04 would retire every operator row 14 d later. The CSV is now parsed and
+  synced on every `discord_6h` run (idempotent); remap stays mtime-triggered.
+- **Bug — capped backfill:** watermark − overlap could re-read a capped page forever; a capped backfill now resumes
+  exactly at the watermark.
+- 01's limiter has `penalize()` (file-persisted) → Cloudflare ban uses it (the spec's synthetic Retry-After workaround
+  dropped). Classification made total (`none`/`no_pollable_target`); root netuid 0 excluded (06/07/12); census rows
+  `is_primary=1`; `discord_handle` values (personal usernames) never stored; `source_agreement` generalised to n sources
+  without `legacy`; widget guild set = primary own-server guilds; heartbeats read by `finished_at` (PIT).
+- Telegram markup re-verified live: plain-space separators (`23 326 members`), two `tgme_page_extra` blocks on bot
+  pages, private-link counts in `tgme_page_extra`; a missing handle / invalid `+hash` answers **200** without a title →
+  `not_found` only when Telegram's own markers are present, else `parse_ok=0` (a layout change must not become 0.0).
+- discord.py 2.7.1 (already locked since Phase 0) API names verified; vanity now lands on `📣・announce` (type 5).
+
+**Built:** `app/nlp/textnorm.py` (B11 shared normaliser), `app/collectors/{discord_api, discord_topology,
+discord_channels, community_store, community_events, discord, discord_gateway, telegram}.py`,
+`app/features/community.py` (8 C5 producers + 3 evidence fns; `register_producers()` → 0 before Phase 8),
+`app/features/normalise.py::presence_ratio`, `app/scoring/spec.py` (ts-1.0 constants; 12 owns it from Phase 8).
+No new config keys, no new dependency, no migration (03 shipped the three tables in v1). The four JOB_TABLE rows are
+available: `python -m app check` → 57 declared, **33 available (phase 6)**; `BUILT_PHASE = 6`,
+`AVAILABLE_BY_PHASE[6] = 33` (34 once 17's `backfill_github` lands).
+
+**Found by the live run and fixed:**
+- **Legacy-only targets point at previous occupants.** 5 of 6 Discord invites declared only by `legacy` opened the
+  *previous* project's server (SN10 Pareton → "Sturdy", SN53 engy → "SignalPlus", SN94 Cathedral → "BITSOTA", SN109
+  Finsight → "Academia", SN113 LongShort → "TensorUSD"; only SN80 `dogelayer` → "OpenRoboto" is current). 08 now
+  ignores legacy-only rows (Discord and Telegram, 08 §2.2). **04 finding (08 §11 Q27):** these rows were first seen
+  2026-10-16 17:27Z and attached to the current occupants despite re-registration; Telegram SN27 `neuralinternet`,
+  SN53 `bittensor_subnet53`, SN106 `v0idai` look the same. 04's occupancy guard should cover them.
+- Dead invites carried `meta.error='dead'` (error must mean failure) — removed.
+- The first CLI cycle (before the legacy fix) was deleted (provisional 18:00Z slot: 154 snapshots, 384 evidence rows,
+  128 `topo:` states) and re-run. Its 8 `invite_expired` events stay (no-delete trigger; the re-run deduped onto
+  them); one concerns a legacy-only code now ignored (SN78 `TWmfwJAtXG`) — info/digest only.
+
+**Live verification (08 §10, 2026-10-17 ~20:30Z; CLI in-process, service still on old code):**
+- Item 0: `check` OK (schema 4, `quick_check=ok`); `jobs` lists the four rows as available.
+- Item 2 (`--once`): 49 distinct codes, **49 OK, 0 failed**, 8 dead (10006: `chipforge`, `sN5NU32M`, `t7BMee4w`;
+  50270: `2XSw62p9Fj`, `8pexneWef`, `N4F7UhEBY`, `adsQPnFRY`, `bvBDat3Gy`), invalid-request count 0. Classes
+  own_server 26 · main_channel 26 · main_vanity 62 · none 11 · invalid 3 · unknown 0 (§10 baseline ±5). One vanity row
+  per cycle; all instants INTEGER; 384 evidence rows (`discord_topology` ok 128, `inflated_days` ok 26 / n/a 102,
+  `tg_members` n/a 128 — written before the Telegram pass). `source_agreement`: agree 11 · disagree 3 · single 26 ·
+  one_dead 1. Reference guilds: SN106 Nodexo 1,975/128 · SN64 Chutes 5,966/1,260 · SN122 Cooking 10,935/1,643 ·
+  SN101 Tag101 now **748/9** (was 1,905; below the 1,000-member inflation floor) · SN55 chain code → the NIOME
+  lookalike 754/10 (`disagree`, Q8). `invite_expired` `expiring` fired for SN14 `SFt8s4gJD`.
+- Item 3 (`--widgets`): 26 guilds, 6 enabled / 20 disabled (403 `50004`, 20 invalid requests ≪ 100); no
+  `username`/`avatar`/`inviter` anywhere.
+- Item 5 (`run-job telegram_daily`): 8 rows / 7 handles, all `parse_ok=1`: NATIX group 23,326/294, inference_labs
+  7,476/87, daturavalidator 174 (SN22 + SN51), SN52 private_channel 252, SN34 private_group 474 `deprecated_marker 1`,
+  SN25 `ursn25` group 203 (new), SN30 `wahoopredict_support` user_or_unknown with `title NULL`. No public channel → no
+  posts yet (as the spec predicted).
+- Item 6 (`--metrics`, print only): SN23 `venue_reachable 1.0` (main_channel), `discord_members` n/a; SN64 members
+  5,966, presence/growth `failed` (1 sample, no 30-d base) — never 0.0; SN72 `tg_members 23326`. `--export-csv`
+  wrote 25 main-server channel ids to `seed/discord_channels.csv` (gitignored).
+- Not run: item 4 (needs `DISCORD_BOT_TOKEN`), item 7 (gateway; checklist B4/B5), items 8–9 (need ≥ 2 daily cycles and
+  the restarted service).
+
+**Tests:** 57 new (`tests/collectors/community/`, `tests/features/test_community.py`, `tests/nlp/`) → `pytest`
+**545 passed**.
+
+**Open:**
+- **Restart needed:** `sudo systemctl restart taosentinel` → `discord_6h` at 00:00Z, `discord_widget_1h` hourly,
+  `telegram_daily` daily; the gateway stays off until checklist B4 (`DISCORD_BOT_TOKEN`, `DISCORD_AGGREGATOR_GUILD_ID`,
+  `DISCORD_GATEWAY_ENABLED=true`).
+- Operator (checklist B4/B5, 08 §2.8): create the bot + private feed server, Follow `📣・announce` and own-server
+  announcement channels, add `kind=announce` rows to `seed/discord_channels.csv`; record main-server channel ids, then
+  `DISCORD_CHANNEL_MAP_REVIEWED=true` (until then the 62 vanity-only occupants get `venue_reachable None`).
+- `.env` sets `DISCORD_USER_AGENT` to the literal placeholder `DiscordBot (https://github.com/<operator>/taosentinel,
+  0.1.0)`; replace `<operator>` with a real URL before the bot token is added (Bot-token calls should identify the app).
+- 04: legacy-only rows on re-registered netuids (Q27); SN80 `dogelayer` needs a `manual_overrides` row to count.
+
+
+## 2026-10-17 — spec 19 W7: τ Terminal integration
+
+Spec 19 was written before the τ Terminal (`~/tao-terminal`) had charts, wallets, trade history and insights. The
+spec got §0.1b + §2.9 (W7) and the terminal now hosts the workbench; TaoSentinel code is unchanged.
+
+- Terminal: `app/workbench.py` (client for `/api/v1/wb/*`, wallet join, pre-trade checks from
+  `data/analysis/LESSONS.md`, held-subnet dereg alerts), routes `/api/workbench/screener` and `/api/workbench/checks`,
+  `[workbench]` config section, 🔎 Screener tab (weather, sliders/presets/IC, sortable table with a "You" column),
+  `emaband` indicator (JS + Python twins, equal to `technicals.overlay`), dereg legend line + cull lines, Positions
+  "Risk" column, ticket checks (also in the confirm dialog). Tests 75 → 87. Service `tao-terminal` restarted (paper).
+- Terminal bug fixed on the way: `#watchlist`/`#draw-toolbar` used `display:flex`, which overrode the `hidden`
+  attribute (watchlist stayed visible under the ticket; an empty drawing toolbar pill showed on the chart).
+- **Data finding (TaoSentinel, open):** `price_bars` 1 h and 5 m have no rows for 2026-10-17 00:00–11:00Z on all 129
+  netuids while `chain_hourly` has SSE rows for those hours. The window is 12/432 bars, under the 10 % gap rule, so
+  the `ema72_*_1h` rows stay `ok` but biased (SN71 `ema72_1h` 0.004881 vs 0.004796 from the terminal's chain candles
+  at the same `as_of`). Needs a rollup/backfill of those hours (owner 05/17); the service restarted 19:12Z.
+
+
+## 2026-10-17/18 — Phase 10 (spec 13 validation harness) built ahead of Phases 7–9
+
+Operator asked to review/improve spec 13 and implement it now (13 §11 item 15). The old SubnetTrader source is now on
+disk (`seed/app/backtest/`, `seed/app/utils/math.py`; old tests in the Pi recovery under `~/USB_Recovery/…/tests/`),
+so this phase is a real port, not a re-implementation.
+
+**Spec review (13 Changelog "2026-10-17 pre-build review")**, every item from the live data or the old code:
+1. Price history is complete hourly from dTAO launch (`blockmachine`) and live (`sse_rollup` 1 h) — the live-era
+   caveats and §11 item 1 were obsolete.
+2. `blockmachine` (74 % of 1 h bars) was missing from the Δ-`subnet_volume` sources; `Bar.volume` is now the bucket
+   *sum* of hourly Δs (last-write-wins kept one hour).
+3. c2's control `emission_share` resolved to `raw:emission_share` = 12's norm rows, which don't exist → every name
+   would be dropped. New chain-state factor `chain:emission_share` (previous day's `chain_daily` share).
+4. 16's manifest key is `quick_check` (spec said UNVERIFIED `integrity`).
+5. Trial key uses `start`/`end` as given → weekly re-runs no longer inflate N; `flock` on the trial log.
+6. `insufficient_data` "fewer than 2·horizon dates" could never hold at h = 84 → `QUANT_MIN_IC_DATES` (10).
+7. Zero emission: 41 % of `chain_daily` rows ≤ 1e-4 % (70 % in 2025-10, so Taoflow did zero outflow subnets);
+   288 ≥ 7-day zero runs vs 55 deregistrations → dereg-only survival diagnostic + operator decision (13 §11 item 13).
+8. Signatures kept ported (`segment_series` list, `build_cross_sections` 2-tuple) so the old tests run unchanged.
+
+**Found while verifying on the real snapshot (spec updated):**
+9. **Price-reset rule over-fires.** In the survivorship window 43 of 47 one-day collapses are crashes of living
+   occupants (launches, 0–5 τ dust pools) and most of the 54 re-registrations show no collapse (SN82's is a price
+   *rise*, depth 3 739 → 2 τ). With 0 unstamped bars the rule now fires only where the occupant is unknown; occupant
+   boundaries are the death signal (`detect_dereg_events` keeps the pure rule as a cross-check: 118 collapses on the
+   full history vs 43 reused slots).
+10. **`chain_daily` is survivor-only.** None of the 54 occupants that died in the survivorship window has a
+    `chain_daily` row (TMC analytics = current occupant only, Phase 3 item 8), so `chain:emission_share` (c2), `demis`,
+    `gate_cross` and zero-emission deaths ignore dead subnets. Measured per result
+    (`coverage.dead_occupant_chain_daily`) + warning `chain_daily_excludes_dead_occupants`; request to 05/17 to persist
+    RPC `DynamicInfo` emission for every occupant (13 §11 item 16).
+11. 05's `owner_locked_share` raw rows are all `status='failed'` (1 152/1 152) → `evidence:owner_locked_share` is empty.
+
+**Built:** `app/quant/` — verbatim `economics.py`, `slippage.py`, `validation.py`; ported + extended `factor_panel.py`,
+`factor_backtest.py`, `walk_forward.py` (factor track), `survival.py`, `dereg_events.py`, `report.py`; new
+`occupants.py`, `pit.py`, `backtestability.py`, `panel_builder.py`, `labels.py`, `regimes.py`, `rank_stability.py`,
+`trials.py`, `provenance.py`, `snapshot.py`, `gate.py`, `__main__.py` (CLI), `weekly_job.py`. Cross-cutting:
+`mathutil.zscore` aligned with the old sample-std version (no other caller); 01 `JobSpec.timeout_key` (closes Phase 0
+item 5; `QUANT_WEEKLY_JOB_TIMEOUT_S` is live); `QUANT_MIN_IC_DATES` + QUANT validators in `Settings`; `python -m app
+check` prints `phase 6 + early quant_weekly`; tests carry `EARLY_JOBS`. No new dependency, no migration, no DB writes.
+
+**Tests:** `tests/quant/` 135 (fixture DB built from 03's schema, 52 s) incl. the ported old factor tests.
+
+**Verified on the 2026-10-17 backup** (13 §10): `snapshot` 14 s → `data/quant/snapshots/quant_taosentinel-20261017T122805Z.db`
+(284 MB); live-DB and `.gz` refusals exit 2; `detect_dereg_events` 118 (≥ 6); `size,age,momentum` 2025-09→2026-06:
+size t −2.8, age +1.9 (h 7) / +4.9 (h 84) — same signs as the old findings, smaller magnitudes (log returns,
+occupant-aware panel, non-overlapping steps); `chain:emission_share` 52 dates; walk-forward survivorship 7 OOS folds,
+live 3 (advisory); `report --run-all` writes a valid verdict (all of c1–c6 fail with reasons: no scores before
+Phase 8; `pending: [c7]`); reproducibility check passes. These 9 `size/age/momentum` tuples are in the real
+`data/quant/results/trials.json`; the other verification runs went to a scratch dir.
+
+**Not done / open:** `/health` check needs `sudo systemctl restart taosentinel` (job stays disabled:
+`QUANT_WEEKLY_JOB_ENABLED=false`). PIT studies (`quality_cg`, metric keys, scores) wait for Phase 8 + 17 S10
+`replay_history`. Operator decisions: 13 §11 items 3 (gate operationalisation), 13 (c6 zero-emission), 14
+(`chain_buys`), 16 (dead-occupant emission backfill). `rank_stability` parity with 12's `rank_stability_daily` is
+untested until 12 exists.
+
+
+## 2026-10-18 — Phase 7: spec 11 team & integrity (reviewed, built, spot-verified live)
+
+**Spec review first** (11 Changelog "2026-10-18 pre-build review + live probe"), against 02, the built 03/04/05 code,
+the live DB and ≈ 30 keyless requests (TMC SN64/79/3/15, Rufus, subnetradar):
+1. **02 conflicts (02 wins):** H3 `sell_ratio > 1` applies only when earned ≥ `OWNER_MIN_EARNED_ALPHA` (02 §C1 amended
+   2026-09-23; 11 still zeroed any principal sale while the cut is off) → new `failed`/`earned_below_min`, T25
+   rewritten, §11 Q5 settled. `trigger_ids` use 02 §C2's `owner_changes:<id>` / `owner_stake_events:<extrinsic_id>`
+   (11 had `chg:`/`ose:`). Evidence keys are **seven** (`owner_sell_ratio_30d` — 11 said 02 had no such key).
+   `value_json` input keys renamed to 12 §2.4's (`n_verified/n_named`, `auto_lock/perpetual_locked`,
+   `max_7d_sell_impact/full_exit/owner_cut_enabled`, `legacy_unaccounted`, `owner_coldkey/name/url/github`) so 12's
+   reference functions reproduce `value` from `value_json` (T43); `owner_identity` is `prenorm`, not `binary`.
+2. **Every UNVERIFIED shape resolved** (11 §2.3.1): all TMC amounts rao; C2 one object `{subnets:[…]}`; C3 bare list;
+   C4 `{count,next,results}` newest-first, `ordering=block_number` ascending, **`FROM`/`TO` must be ISO — numeric values
+   are silently ignored and return the whole history**; on `remove_stake*` rows `from_coldkey` is null and the owner is
+   `to_coldkey`. Rufus `{subnets, data:{"<netuid>":{meta, owner{…pct in percent}, rows[]}}}`, baked-at slow (60 s).
+   subnetradar is a server-rendered HTML table (no JSON); new owners are 0x pubkeys → SS58 via stdlib blake2b.
+3. **Owner cut derived keylessly:** no TMC answer carries owner-cut-per-block, owner-cut-enabled or auto-lock; on every
+   emitting subnet `pending_owner_cut / blocks_since_last_step` = 0.18 α/block (18 % of `subnet_alpha_out_emission`);
+   SN74 shows 0 with emission on (cut disabled). C1 therefore runs in list mode (04's snapshot, 0 requests); detail
+   only when the list is > 12 h old. Auto-lock comes from Rufus only.
+4. **REST owner-lock fields are unreliable:** `owner_personal_*` are 0 in the list and were 646,674 α then **0** fifty
+   minutes later in the SN64 detail answer → snapshots copy the SSE `chain_hourly` values (REST only as fallback).
+5. **C5 dropped:** stake-removed rows have no coldkey and the `hotkey` filter takes `<ss58>-<netuid>` →
+   `OWNER_STAKE_REMOVED_ENABLED` defaults false and the validator refuses true; reconciliation is info-only.
+6. **`rpc_owner_history` collapse** (Phase 3 item 9): 324 non-first rows are flagged `owner_coldkey`, 191 are real
+   changes (SN70: 4 flagged, 1 real). The seed compares consecutive states and ignores `change`; pre-registration rows
+   are never a baseline (a test caught that bug).
+7. **Team parser on the 128 live records:** the bare name rule kept ≈ 70 LLM headings ("Subnet ownership",
+   "Rebranding and Evolution", "NVIDIA Inception Program"); word list + connective/lower-case/domain rules +
+   `split_name_role` ("Xavier Lyu, Founder"). Yield 184 candidates in 43 named records (119 with a profile URL), 63
+   unstructured, 12 placeholder, 9 anonymous, 1 stale-for-occupant (spec estimated 250–360 from all `<strong>` spans).
+8. **Operator decision (§11 Q20):** SN64's owner sent 35–45 k α/month to coldkey `5F6D1y…` via `transfer_stake`
+   (Feb–Jun 2026) ≈ its whole 38.9 k α cut → S1 ≈ 0 and H3 (red flag) in months above 1. Stake-event whitelists may
+   now pin `dest_coldkey` (`--new-coldkey`), so a disclosed treasury key is one long-window row; alternative = ledger
+   change excluding `transfer_out` from S1.
+9. 03 deltas re-checked: `owner_changes.extrinsic_id` exists, the catalog has `owner_coldkey_swap_announced` /
+   `owner_self_dealing_suspected` (11 §11 Q2 b/c were stale). `app/whale/events.py` source is not on disk (no
+   `app/whale/` in `seed/app/` or the Pi recovery) → re-implemented against `/v1/`.
+
+**Built:** `app/integrity/` — `constants`, `models`, `team_parse`, `team`, `team_seed`, `owner_sources`, `classify`,
+`owner_metrics`, `detectors` (+ `drill` CLI), `whitelist`, `owner_admin`, `review`, `owner_collect`, `owner_watch`,
+`owner_history`, `features`, `taostats_c8`, `health`; `app/features/text.py` (verbatim `_ANON_TOKENS` /
+`_looks_anonymous` from `seed/app/strategy/quality.py`), spec 12's P4 reference functions in `features/normalise.py`,
+`app/whale/events.py`, `scripts/manual_entry.py`, `scripts/owner_probe.py`; `/health.integrity`. Settings: Phase 7
+validators (§5), `OWNER_STAKE_REMOVED_ENABLED=false`. No migration, no new dependency. `BUILT_PHASE = 7`,
+`AVAILABLE_BY_PHASE[7] = 38` (39 once 17's `backfill_github` lands); `python -m app check` → 39 available (phase 7 +
+early quant_weekly). Legacy notes copied to `seed/subnet_edge/` (checklist A3; gitignored).
+
+Implementation choices: a manual `run-job owner_collect_daily` outside 20:30–23:30Z uses `started_at + timeout − 900`
+as soft deadline (the window rule binds scheduled runs); `Collector.run(netuids=…)` for operator spot checks; coldkey
+changes are recorded once per (occupant, new coldkey) within ±3 d and re-points per (occupant, new hotkey) so the
+hourly watch, the daily collect and the RPC seed never double-penalise S3; subnetradar raw is stored as parsed rows +
+sha256 (not the 485 kB page); `decaying_lock_added` also needs Δd ≥ `OWNER_PERP_OFF_MIN_ALPHA`; review error
+`reason_required` (reject / whitelist without a reason) and team reason `not_seeded` added; `initial_alpha_est`
+(TaoStats `NetworkRegistrationQueued`) not built — keyless S5 applies the uniform −0.2 (§11 Q7).
+
+**Live (2026-10-18 ~11:00Z, CLI, service still on old code):** `owner_probe` 16 TMC calls → `data/owner_field_map.json`
+(owner cut 0.18 α/block on 64/79/3/15; Rufus 119 subnets; subnetradar 47 rows). Team seed dry runs: 184 candidates;
+legacy exactly SN120 "Const" (founder, `sn120_affine.md:14`) + one SN67 anonymity note, SN103 skipped (re-occupied).
+Spot collect for 64/79/3/15 (12 TMC requests, **writes 4 real snapshots + watermarks**) and a no-write features
+preview: S2 SN64 0.977 · SN79 0.612 (owner position grew to 1.65 M α; spec's 0.70–0.75 used 1.3 M) · SN3 0.0; S1 SN64
+0.666 (13 k α transfer vs 38.9 k earned); S5 SN79 0.22 (post-dTAO −0.2); SN15 `team_doxxed` 0.0 ("kept private").
+RPC seed preview (read-only): 5 active occupants changed owner coldkey in the last 30 d (SN102, 109, 112, 117, 47) →
+`owner_control_change_trigger = 1` after the seed (subnetradar lists 112/117/47 too).
+
+**Tests:** `tests/integrity/` 73 (T1–T45 incl. the ORO override, PIT whitelists, budget/pacing with a fake clock,
+spec 12 anchors); full suite **744 passed**.
+
+**Not run / open:**
+- **Restart needed** (`sudo systemctl restart taosentinel`) → `team_seed_daily` 04:20Z, `owner_rpc_seed` 05:20Z (armed),
+  `integrity_features` 06/12/18:07Z (+ catch-up), `owner_watch_hourly`, `owner_collect_daily` 20:30Z (first full run
+  back-fills 35 d of activity per owner coldkey; ≈ 365 TMC requests).
+- §10 steps 2/4–8 as written need the restart and 24 h of running; step 6 (drill on a 5 GB copy) not run (covered by
+  tests). Operator decisions: §11 Q4 (S2 grace), Q20 (owner transfers / SN64 treasury whitelist), Q7 (−0.2 penalty).
+
+## 2026-10-18 — Phase 8: spec 12 feature store & ts-1.0 scoring engine (reviewed, built, dry-run verified live)
+
+**Spec review first** (against live schema v4 and the recovered old sources in `seed/app/`; full list in 12's
+changelog 2026-10-18):
+1. **Pre-launch rule broke history:** 04 sets `occupants.activated_at` = the registry run that first saw activity —
+   all 128 live occupants carry 2026-09-25, 17's historical rows NULL — so "`activated_at ≤ slot`" made every slot
+   before 2026-09-25 `pre_launch` (the §2.15 backfill would have had no composites). Status now uses the launch
+   instant `min(activated_at, block_ts(first_emission_block))` via 17's `block_times`; unknown launch → active unless
+   `status='pre_launch'` (12 §2.6, §11 Q22). Open for 04/17: 62 occupants share `first_emission_block = 5228683`
+   (2025-03-28, the earliest block 04 saw).
+2. **Historical regime:** `chain_hourly` has prices only on SSE rows (since 2026-10-16; analytics rows `price NULL`)
+   → official slots reuse an existing `regime_daily` row (17's 606 S7 rows), `v_w` re-derived (12 §2.7 step 3a).
+3. `score_runs` key is `(run_id, spec_version)` → one run id per slot (`sc-/cu-/bf-/cli-YYYYMMDDTHH-…`, `rs-…`);
+   `n_errors` is a real 03 column (§4 case 19 said otherwise).
+4. Registry check 9 compared pillars for legs/aux, but 03 files them under the consuming pillar → role + weight for
+   all keys, pillar for scored keys; `registry_hash` also excludes the `absence_rule` text.
+5. First success wins stated exactly: a failed raw row is upgraded only by a later *successful* row (03's trigger).
+6. **Backfill rules added** (§2.13 item 5): a primary-spec backfill must not step `red_flag_state` (it holds the live
+   state) nor call the forward-only 08/09/10 fns (≈ 10⁶ permanent failed official rows) nor emit events → in-memory
+   flag state, no fns/derive, no events, stops before the first live slot.
+7. Manual clear stores `ids(state) ∪ ids(this run)` (test-found: same-run evidence re-raised the flag next run).
+8. `mathutil` is in `app.util` (spec said `app.quant`); `scores_status` async; stall check placement; golden fixture
+   needs 57 more `x_engagement_30d` values (spec said 56). 03 already catalogues `owner_sell_ratio_30d` (Q20 stale).
+
+**`mathutil` replaced by the verbatim port** of `seed/app/utils/math.py` 1-177 (Phase 2 had re-implemented it):
+0-based `_average_ranks`, `pearson_r`/`spearman_r` 0.0 below n = 5 with tail alignment, `returns_pearson_r` ≥ 6 prices,
+`effective_bets` → inf for a hedged book, annualised `rolling_volatility` (×√2190). Only caller of the 1-based ranks
+(`features/technicals.pct_rank`) adjusted (same output); quant/wb suites unchanged (178 pass).
+
+**Built:** `app/features/` `registry.py` (62 rows, import-validated, `register_metric`/`register_many`,
+`EVIDENCE_FNS`), `normalise.py` (all §2.5 fns, `NORMALISERS`, `normalise_value`), `types.py` (+`RawRow`, `NormValue`,
+`Occupant`), `store.py`, `derived.py`, `engine.py` (`FeatureEngine`, `FeaturesJob`), `__main__.py` (preview CLI);
+`app/scoring/` `spec.py` (`ScoringSpec`, `TS_1_0`, `spec_hash`; 08's constants kept), `golden.py` (pinned hashes:
+registry `8d0e7d0f…`, spec `1f24aa80…`), `red_flags.py`, `tiers.py`, `explain.py`, `events.py`, `stability.py`,
+`engine.py` (`ScoreCalculator`, slot planning, `ScoringService` run/catch-up/kill/shadow/rescore/backfill,
+`scores_status`, `ScoringJob`), `__main__.py`; `app/quant/regime.py::regime_for_slot`; `/health` awaits
+`scores_status` and adds `scores_stale`. `p1_matrix` adapted to the spec `rankg`. No DDL, no migration, no new
+dependency. `BUILT_PHASE = 8`, `AVAILABLE_BY_PHASE[8] = 40` (41 with 17's S9). Interpretation: a `failed` raw row is
+"unobservable" for `repo_gone`/`all_repos_archived` (→ None, no clear-clock tick), not "present".
+
+**Tests:** `tests/features/` +4 files (registry, normalise/rankg, PIT/store/derived, features job), `tests/scoring/`
+golden worked example (every §2.14 number, rows, events — reproduced first time), flags state machine, units (tiers,
+EMA, pillar port fidelity, velocity, 200 random Σ impact = Health − 50, spec hash, slot planning), service
+integration (restart invariance over 10 slots, catch-up, kill, shadow, pre-launch/root, launch instant, immutability,
+insufficient transition, score_jump 15.0/14.99, events off, backfilled payload, scoring_stalled latch, stability,
+regime reuse, backfill, rescore refusals). Full suite **842 passed**.
+
+**Live (2026-10-18 12:46Z, CLI; service still on old code):** `registry --check` → "62 metrics (45 scored: P1 10, P2 10,
+P3 6, P4 7, P5 8, P6 4; 9 legs; 8 aux); pillar sums OK; hash … == golden". Schema: no `metric_norm`, 03's `scores`
+columns, both append-only triggers. `run-job features_hourly` ok: **1,280 raw rows written** at as_of 12:00Z
+(provisional) = 128 × (8 community fns + 2 derived), 0 fn errors, 11 X/P6 keys `producer_unavailable` (09/10 unbuilt);
+root excluded. `scoring run --dry-run` (12:00Z, nothing written): 128 occupants, regime DISPERSED (v_w .25), SN64 A
+81.3, flags SN16 `dereg_imminent`, SN35 + SN59(pre-launch) `stale_identity`, 3 insufficient; 1.0 s wall, 104 MB RSS.
+Live data notes: Velocity is mostly the blend of `chain_buys` alone (`net_flow_30d` fails on 126/128 live,
+`attention_7d` unbuilt) → the chain_buys zero-tie gives V ≈ 42.7 for many occupants (§11 Q6); P4 empty until
+`integrity_features` runs on the new code.
+
+**Not run (deliberate) / open:**
+- No real `scoring_6h`/`scores` write: `scores` is append-only, the first official row seeds every EMA, and
+  `red_flag_raised`/`tier_change` events would page via the running `alert_dispatch`. They start with the restart
+  (`sudo systemctl restart taosentinel`; `scoring_6h` has `startup_catchup`, so the boot run scores the current slot,
+  reconstructed if > 45 min late).
+- After the restart: §10's run/explain/health/kill-drill/stability/power-loss items; the §2.15 backfill
+  (`python -m app.scoring backfill --spec ts-1.0 --from 2025-09-22`) is an operator decision (§11 Q19) — it now stops
+  before the first live slot.
+
+
+## 2026-10-18 — Phase 9: specs 09 (X / KOL / RSS·News·YouTube) + 10 (LLM classification, P6) (reviewed, built, keyless parts verified live)
+
+**Spec review first** (both changelogs "2026-10-18 pre-build review"), against the live DB (schema 4), ~30 keyless
+probes, the bundled `claude-api` skill v2.1.301 (model table cached 2026-10-06) and the installed `anthropic==1.15.0`:
+- **09 §2.9 — subnetalpha tweet feeds are gone.** 0 of 10 probed pages (then all 63 in the live run) carry a
+  `.ctf-item`/`/status/` link; only the plugin CSS (`data-ctf-style="<feed id>"`) remains; 63 embed ids, not 74. The
+  fallback is now gated on a fetch with ≥ 1 matched item within 3 d (`job_state('x_ctf_crosscheck','page:{occ}')`),
+  otherwise `failed ctf_no_feed` — without the gate every handle-holder would have read "0 posts" → false
+  `silence_45d`. With `X_PROVIDER=null` (default) there is now no X data at all (09 Q15).
+- **09 §2.4 — `legacy` X rows never count.** 3 occupants have only legacy rows (SN113's `TensorUSD` is the previous
+  occupant's account — the 08 Q27 problem), and live SN25 (UR) carries `MacrocosmosAI/legacy` beside its own
+  `urnetwork` (found during the live check; the first "legacy-only" rule would have routed Macrocosmos posts to UR).
+  One `x_accounts` row per account, team wins (`MacrocosmosAI` is a team handle and a KOL; `handle_lower` is UNIQUE).
+- **09 §8 — module clash:** both specs claimed `app/nlp/rules.py`; 09's matching moved to `app/nlp/match.py`
+  (JOB_TABLE fixes `nlp.rules:LlmRulesFallbackJob` for 10).
+- **09 Appendix A** — feeds probed: Cointelegraph/Decrypt/The Block/A Bittensor Journey/0xSammy/Google News/Novelty
+  Search OK; tao.media, SimplyTao, Own Your Mind, bex.co dead (404/500) → seeded `enabled=0`; Pine Analytics is
+  general crypto → `filtered=1`. **YouTube own-channel test** added: subnetalpha `video_url`s are mostly third-party
+  (SN1's is a taostats Novelty Search episode); ecosystem channels taostats + Opentensor Foundation (the playlist owner,
+  found by the build) and channels shared by ≥ 2 occupants are never an occupant's own channel.
+- **10 §2.3 — models re-verified at build time:** defaults → `claude-haiku-5-5` (bulk; $0.10/$0.50, Batch $0.05/$0.25,
+  fixed id, adaptive thinking on by default → frozen `BULK_EFFORT="low"`, `max_tokens` 8192, blocks read by type,
+  refusals = parse failures, cache minimum 512), `claude-sonnet-5-5` (escalation), `claude-opus-5-5` (narrative,
+  $4/$20); Sonnet/Opus use `fallbacks="default"` (`server-side-fallback-2026-07-01`, new key `LLM_REFUSAL_FALLBACK`).
+  Projected spend ≈ $21–31/month (was $37–48). `PRICES` updated (dated ids resolve to their alias). Async batch results
+  form verified in the SDK signature. `LABEL_POLICY` is a module constant in `scoring/spec.py` (a `ScoringSpec` field
+  would have changed 12's golden spec hash); `confirm_review(…, note=None)` because 11's built code calls it with `by=`.
+- 01 §5 gained `LLM_REFUSAL_FALLBACK` and the new model defaults (config inventory 657 keys); `X_PRICES_JSON` now has
+  the validator 09 §5 promised.
+
+**Built** (three parallel build agents on disjoint files, then integrated here): `app/collectors/x_providers/`
+(base, prices, twitterapi_io, official_v2, null, `make_provider`), `x_handles.py`, `x.py` (4 paid jobs, resolution,
+§2.6 ingest/attribution, governor check→record, budget events, CLI), `x_ctf.py`, `rss.py`, `news.py`, `youtube.py`;
+`app/nlp/` `match.py`, `kol.py`, `ambiguous_names.txt`, `schema.py`, `rubric.py`, `prompts/classify_v1.md`
+(sha256 `e47d012b…`) + `narrative_v1.md`, `aliases.py`, `queue.py`, `llm_classify.py`, `rules.py`, `lexicon.py`,
+`resolve.py`, `events.py`, `narrative.py`, `eval.py`; `app/features/` `social_x.py` (6 fns), `social_feeds.py`
+(1 leg + 3 evidence fns), `sentiment.py` (4 P6 fns); `seed/kol_accounts.csv` (37 / 32 verified) + `seed/feeds.csv`
+(both now whitelisted in `.gitignore`), `scripts/build_kol_list.py`, `scripts/record_x_fixtures.py`. No DDL, no
+migration, no new dependency. `LABEL_POLICIES["ts-1.0"]` = bulk `claude-haiku-5-5:e47d012b:1`, escalation
+`claude-sonnet-5-5:e47d012b:1`, fallback `rules:v2`. Tests: `tests/collectors/x/`, `tests/collectors/feeds/`,
+`tests/nlp/` (14 new files + fakes), `tests/features/test_social_x|social_feeds|sentiment_metrics.py`; fixtures for
+X (synthetic), ctf, rss, youtube (trimmed live + synthetic), llm, the 40-item synthetic golden set. With Phase 9 every
+phase 0–10 is built → `tests/conftest.py` `BUILT_PHASE = 10`, `EARLY_JOBS` empty, `AVAILABLE_BY_PHASE[9] = 52`
+(Phase 9 has 12 jobs, not 13), `[10] = 53` (54 once 17's `backfill_github` lands). Full suite **1102 passed**
+(final state, after the `rules:v2` and legacy-row fixes).
+
+**Notable build deviations** (details in the agents' notes, kept here in short):
+- 09: one provider call = one HTTP page (§8.2's one governor check per page wins over §2.3's internal paging);
+  `since_id` advances only after a fully successful run; ctf upserts never NULL a paid provider's engagement
+  (`COALESCE`); ctf/feeds "last OK fetch" lives in `job_state` (no DDL column); YouTube channel discovery runs daily,
+  capped at 40 lookups/run (a Sunday-only run of ~127 rows would exceed the 900-s timeout); redirects followed manually
+  (Http returns the original URL); the KOL seed is lazily loaded by `x_kol_poll` when `kol_accounts` is empty;
+  `author_credibility` takes `db_dupes` (same author) and `db_coord` (other authors).
+- 10: confirmations are stamped `payload.confirmed_at`/`confirmed_post_ids` and `event_impact_14d` reads those
+  (an upgraded pre-existing event's `observed_at` would leak a confirmation into earlier `as_of`s); every escalation
+  dead end (cap, timeout, purged text, 3 tries, refusal) gets a review row; the rules fallback is bounded to items
+  ≤ 30 d old; `count_tokens` runs after a successful submit, so a budget denial makes zero API calls.
+- **Rules classifier → `rules:v2`.** The §8.4 regexes as written scored macro-F1 0.442 on the 40-item golden set
+  (target 0.45); widened ("socially engineered", spot/perp listings, "stepping away", "unstaked … exchange",
+  integrations, regulatory, emissions) and re-ordered. The 0.976 that follows is tuned on the same synthetic items —
+  **not** a generalisation estimate; the real check is `eval bootstrap` on week-1 items (checklist D6). The live run then
+  exposed two precision bugs: "Preventing Exploits" (a video chapter) → `security_incident`, and "liquidity
+  injections" in a TAO explainer → SN77 Liquidity. Fixed (incident wording required; ordinary-word names get
+  confidence 0.5 < 0.6 unless a subnet cue is adjacent) and the version bumped to `rules:v2`, because 72 `rules:v1`
+  labels had already been written (append-only). v1 is not in `LABEL_POLICY`, so it is invisible to every metric.
+
+**Live verification (CLI, service still on old code; keyless only — no X key, no Anthropic key):**
+- `check`: 57 declared, **53 available (phase 10)**, 4 unavailable (17's `backfill_github`, 3 × Phase 11).
+- `build_kol_list --load`: 37 / 32 verified (09 §10 item 2). `MacrocosmosAI` team keys corrected to SN1/9/13 (SN25
+  and SN37 are now UR and Aurelius) in the seed, the script and the live row.
+- `run-job x_ctf_crosscheck`: `pages=63 with_feed=0 items=0`, 62 s, 63 page states all `(200, 0 items)`.
+- `run-job rss_feeds_poll`: 7 feeds, 5 OK, 40 new items. **The two `*.substack.com` feeds answer 403
+  `cf-mitigated: challenge`** to the app's Python client while curl gets 200 — Cloudflare keys on the TLS fingerprint,
+  not headers (tested with four header sets). Not evaded; both feeds (Pine Analytics, filtered; Subnet Edge, dormant
+  since Feb) will reach `feed_dead`. Custom-domain Substacks work.
+- `run-job news_google_poll`: 42 queries all OK, 322 items, 155 attributed, 411 s.
+- `run-job youtube_poll`: Novelty Search playlist 13 videos (all rule-attributed); 46 video channels resolved, **0 own
+  channels** (31 shared, 15 ecosystem — one channel sits on 12 occupants' videos) → `video_uploads_90d` absent for
+  now (09 Q17); 35 `youtube_channel_resolved` info events.
+- `run-job llm_rules_fallback` (LLM off): 72 items labelled (news/video ≤ 30 d) under v1, then again under v2.
+  Events: v1 produced `security_incident` **warnings 1081/1082 (SN10, SN19) — false positives, already taken by the
+  running alert dispatcher → they will appear in the next digest; ignore them** (events cannot be edited after
+  alerting); v2 produced info events only (`revenue_customer` SN10/SN19).
+- Metric preview (`python -m app.features … --netuid`, nothing written): SN64 X legs `failed ctf_no_feed`, SN113
+  `absent no_x_account` (legacy-only), SN4 `event_impact_14d` 1.57 (rules label), `attention_7d` `baseline_short`
+  (2 trending days), `kol_coverage_30d` `kol_poll_stale` (X off → 12 falls back, and the fallback fails too).
+
+**Not run / open:**
+- Anything paid: X (no key — provider shapes are synthetic, `FIELD_MAP`-isolated, 09 §9.2 live tests and
+  `record_x_fixtures.py` pending) and Anthropic (no key — Haiku 5.5 `effort`+`format` inside Batches and the beta
+  `fallbacks` call are unverified until the 10 §9 network smoke tests run).
+- **Restart needed** (`sudo systemctl restart taosentinel`) for the 12 Phase 9 jobs to be scheduled; the rules
+  fallback then runs hourly and the free collectors on their crons.
+- Operator: choose an X plan (09 Q1 — now the only X source), add `ANTHROPIC_API_KEY` + `LLM_ENABLED=true` when wanted
+  (≈ $21–31/month), confirm KOL roles (checklist D3), add YouTube channel rows for subnets (09 Q17), golden-set
+  labelling after week 1 (D6). 04 follow-ups: legacy X rows on re-registered netuids (09 Q16 / 08 Q27).
+
+
+## 2026-10-18 — Phase 11: spec 14 (HTTP API, SSE, exports, Telegram commands, web UI) (reviewed, built, tested offline)
+
+**Spec review first** (14's changelog "2026-10-18 pre-build review"), against the built Phases 0–10 code and the laptop:
+- **UI → `/ui` on :8090, no Node.** The laptop has no Node.js; 19's `/wb` already ships as one static page on this app and
+  02 §K1 retired the second listener. The Next.js fork on `:3001` is replaced by `frontend/ui/{index.html,app.js,style.css}`
+  (plain JS, inline-SVG charts, no CDN) served by `app/api/ui.py`. Same origin → no CORS entry, no baked
+  `NEXT_PUBLIC_API_TOKEN` (the token lives in the browser's `localStorage`; 14 §11 Q1/Q2 resolved), no frontend unit.
+  `UI_BASE_URL` default → `http://127.0.0.1:8090/ui`; `FRONTEND_PORT` retired (key kept). 16's opt-in
+  `taosentinel-frontend.service` / `--with-frontend` are now dead: do not install them.
+- **Routing re-synced to 02 §D3 (amended) and §K5:** no `direct` class (`disk_critical`/`db_integrity_failed` were
+  already `immediate` in code), 19's four workbench types listed; the "dispatcher inactive → send direct" text removed.
+- **Factory:** the built `create_app(get_runtime)` + per-router `configure()` pattern kept; `ApiContext` dropped.
+- **Rescore:** 12's `ScoringService.rescore` is synchronous and mints its run id at the end → the route refuses
+  synchronously (`spec_unknown` 422, `shadow_requires_other_spec` 422, `scoring_killed` 423, `rescore_running` /
+  `slot_already_scored` / `slot_regresses` 409), then runs the slot as a background task and answers 202 with a
+  `request_id` (also `rescore_requested.run_id`; 14 §11 Q5).
+- **Origin guard** admits the request's own origin (browsers send `Origin` on same-origin POSTs — the `/ui` and `/wb`
+  forms would otherwise get 403) and now also guards 19's three POSTs.
+- **Error shape:** one handler set gives every 4xx/5xx `{error, detail}`; Phase-0 `HTTPException(detail="<code>")`
+  and 19's `detail={"error":…}` keep their `detail`, so existing clients/tests are unchanged.
+- Quant kinds from the real file names (`gate_verdict_` → verdict, `ic_series_*`/`trials.json` sidecars hidden, 19's
+  `wb_study_`); 11's `reason_required` mapped; provider id `telegram`; pause body/replies are 16's built ones (`hours`).
+- Events are ordered by `id DESC` (a total order, so `before_id` keyset paging is exact).
+
+**Built:** `app/api/{errors,common,queries,scores,subnets,events,export,quant,hub,stream,manual_service,manual,review,
+registry,ui}.py`; `health.py` gets the 12 service probes (4 active, 4 passive, 4 local; response cached
+`HEALTH_SERVICES_CACHE_SEC`); `control.py` gets `/control/rescore`; `app.py` rewired (spec header via a pure-ASGI
+middleware so SSE is not buffered); `app/notifications/telegram.py` gets the ported `TelegramBot` (Pi-recovery source,
+HTTP through `Http.request("telegram", …)`, chat allowlist `TELEGRAM_ALLOWED_CHAT_IDS`); `commands.py`
+(`CommandDispatcher`, 19 commands, nonce confirmations), `bot.py` (`telegram_bot` LongTask, idles without a token),
+`watch.py` (`dereg_watch`), `digest.py` (`needs_review_digest`, watermark below the oldest unrouted row);
+`format.py` += `bar/dot2/num/cut`. No DDL, no migration, no new dependency.
+
+**Tests:** `tests/api/` (conftest seeding SN64/SN47/SN130/SN9; `test_reads` 16, `test_writes` 10, `test_stream` 5) and
+`tests/notifications/` (`test_commands` 11, `test_jobs14` 3). The feed is validated against a test-local mirror of
+15 §3.2's `FeedPayload` (15 unbuilt). Two existing tests updated for Phase 11 (`test_control_routes` takes its
+unbuilt job from `rt.unavailable`; the stagger test no longer expects `telegram_bot` unavailable).
+`tests/conftest.py` `BUILT_PHASE = 11`, `AVAILABLE_BY_PHASE[11] = 56` (57 once 17's `backfill_github` lands).
+Full suite **1147 passed**.
+
+**Not run (deliberate) / open:**
+- Nothing live beyond read-only GETs: the running service still has the old code. `sudo systemctl restart taosentinel`
+  brings the routes, `/ui`, the bot (needs `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`), `dereg_watch` and the Monday digest.
+- `WATCHLIST_NETUIDS` is empty → `dereg_watch` pages for nothing until set (14 §11 Q6).
+- 14 §10 verify items need the restarted service and real scores (none exist yet: `scores` is empty until the
+  restart's first `scoring_6h`).
+
+---
+
+## 2026-10-18 — Phase 12: spec 15 (trading-bot integration) — reviewed, retargeted, consumer built in `~/tao-terminal`
+
+**Review finding that drove the rewrite.** 15 patched the *old* SubnetTrader (`E:\SN_Trader`, `EmaManager._enter`
+:2146, `ema_positions` ALTERs, `.env` `SENTINEL_*`, `/health` on :8081). That bot is not being revived: the agreed
+plan (`~/tao-terminal/docs/SUBNETTRADER_V2_PLAN.md` §3.1) builds v2 inside the τ Terminal as `tao-bot`, reusing its
+`Trader`. 15 is retargeted there (its new §0 table): the hook wraps `Trader.preview` (base preview → factor →
+re-preview, so every base gate is decided on the base amount and the sentinel can only shrink an approved entry), the
+audit is a `sentinel_decisions` table (`base_tao`, `amount_tao` ⇒ applied ratio exact, `trade_id` → `app_trades`),
+config is `config.toml [sentinel]` with `POST /api/sentinel/reload`, alerts are desktop + SSE, and there is no
+systemd ordering (user unit vs system unit cannot be ordered; the consumer is neutral without the producer).
+
+**Bugs found and fixed**
+1. **14's `/scores/latest` ETag ignored `stale`.** When the TTL passed without a new row, the body's `stale` flipped
+   to true but the ETag did not, so an `If-None-Match` consumer got 304 forever. `app/api/scores.py` now hashes
+   `is_stale(max_as_of, now)` into the tag; `test_scores_latest_killed_and_empty` asserts it (verified to fail
+   without the fix). Needs the TaoSentinel restart to go live.
+2. `INSERT OR IGNORE` also swallows NOT NULL violations: a `score_feed_log` row without `stale` vanished silently
+   (caught by the telemetry test). `log_feed_rows` defaults the NOT NULL columns.
+3. A halved order could fall under the 0.01 τ chain minimum → floored at `[trading] min_tao_per_trade`.
+4. `ttl_seconds > 86400` rejected the whole batch → wire range 1..30 d, effective TTL still capped by `ttl_max_sec`.
+
+**Contract checks:** a real body from 14's seeded test app (`build_feed`, `include_insufficient=1`, and the empty
+spec) validates with the consumer model and is the terminal fixture `tests/fixtures/scores_latest_producer.json`;
+13's verdict keys (`gate_pass`, `pending`, `promotable`, `upsize_gate_pass`, INTEGER `generated_at`) and c7 reader
+(`schema`, `days`, `entry_coverage`/`live_signal_coverage`, `n_entries`, `entries` length) match `app/quant/gate.py`
+and `__main__.load_telemetry`; the five default block flags exist in `FLAGS_TS_1_0`; `SCORE_FEED_TTL_SEC` is already
+25200 (old Q1 resolved).
+
+**Built (in `~/tao-terminal`, not this repo):** `app/sentinel/{models,kill,factor,gate,settings,store,client,storage,
+hook,telemetry,runtime}.py`; `termdb.connect` creates `score_feed_log` + `sentinel_decisions`; `server.py` starts a
+`SentinelRuntime(consumer="terminal")` (a bad `[sentinel]` section starts it disabled), adds `/api/status.sentinel`,
+`GET /api/sentinel[/{netuid}]`, `POST /api/sentinel/{kill,resume,reload}` and a TaoSentinel advice line in the ticket
+checks (buys; never resizes manual trades); `config.example.toml [sentinel]`; README section. 82 new tests
+(`tests/test_sentinel_*.py`, `tests/sentinel_util.py`, `tests/conftest.py` resetting the process-wide gate cache);
+terminal suite **169 passed**. Pre-change copies of the touched terminal files are in the session scratchpad
+(`tao-terminal-pre-spec15/`); the terminal is not a git repo. This repo: only the ETag fix + test, the mirror-model
+comment in `tests/api/test_reads.py`, spec 15 rewritten.
+
+**Live:** `systemctl --user restart tao-terminal` done — `/api/status.sentinel` = `enabled false, mode_effective off`,
+tables created (A2/A3 pass). The feed itself is **not** live: TaoSentinel's running process predates Phase 11, so
+`/api/v1/scores/latest` is 404 and `scores` is empty. `[sentinel] enabled` left false (enabling now would only log
+failed polls and raise a "feed down" alert after 2 h).
+
+**Open:** `sudo systemctl restart taosentinel` → first scoring slot → 15 §10 T1–T3 (T2 saves the live fixture) → set
+`[sentinel] enabled = true` for feed liveness (L1–L4). Phase B needs v2 B1 (the bot engine), which needs the v2 plan
+§9 answers. New operator questions 15 §11 Q16 (paper entries count for c7), Q17 (min-trade floor), Q18 (two pollers).
+
+---
+
+## 2026-10-18 — Audit after Phase 12 (service restarted on Phase-12 code, first scores, spec 20 written)
+
+**What happened.** The operator restarted the service at 20:11Z (`boot classified: clean`); the startup catch-up ran
+`integrity_features` and `scoring_6h` at 20:16Z → run `sc-20261018T18-b24573bd` (as_of 18:00Z, `provisional` /
+`reconstructed`, 128 universe, 128 scored, 1 pre-launch, 3 insufficient, 13 events, 0 errors, 6 s). First real
+`scores` rows: tiers A 7 / B 27 / C 48 / D 26 / F 19; regime DISPERSED; confidence mean 0.56; flags `dereg_imminent`
+SN16/40/47/70/103/127 and `stale_identity` SN35/39/59/70/103/113. `/api/v1/scores/latest` answers 200 (124 rows, ETag,
+`stale=false`). First official slot = 2026-10-19 00:00Z. Both suites green: **1147 passed** (8 min 07 s) here,
+**169 passed** in `~/tao-terminal`.
+
+**Findings (details and fixes in `specs/20-consolidation-and-next-steps.md` §1.5):**
+1. No alert channel: `telegram_configured=false`, 8 immediate alerts pending, 35 critical events never delivered.
+2. Host prep (checklist A1 / 16 §2.2) never ran: timezone Europe/London, sleep targets not masked, lid switch default,
+   sqlite3 CLI absent; `systemctl` reports `NeedDaemonReload=yes` for `taosentinel.service` (rendered unit changed on
+   disk; content identical to `ops/systemd/taosentinel.service` after placeholder substitution).
+3. `chain_daily` has no rows 2026-09-25 → 2026-10-09: the service was down and the TMC 1Y analytics step (17 S3) was not
+   re-run after W0; `tmc_daily` writes only the trailing 7 days (`analytics_1w`). Effect: `net_flow_30d` is
+   `failed:insufficient_history` on 126/128. Fix = `python -m scripts.backfill_tmc --tasks analytics --redo` (spec 20 N1).
+4. P4 is `null` for every occupant at 18:00Z (catch-up ordering: `integrity_features` ran in the same minute as the
+   slot). Raw rows now exist (`owner_commitment` ok 117; `control_stability_90d` 124 × `no_owner_snapshot` until the first
+   `owner_collect_daily`; `team_doxxed` failed 118 because the 11 team seed was only dry-run).
+5. Metric coverage at the first slot: 24 of 45 scored metrics populated for ≥ 90 occupants. Empty for free-to-fix
+   reasons: `venue_reachable` 61 × `main_vanity_unreviewed` (B5 not done), announcement legs (no Followed channels,
+   B4), `participation` (`TMC_NEURONS_ENABLED=false`), `holder_dispersion` (`tmc_weekly` not yet run on new code),
+   `product_status` (manual D2). Empty for budget reasons: every X leg, `polarity_7d`, `kol_coverage_30d`.
+6. 45 `Settings` keys are declared but never read anywhere (list in spec 20 §5.1); dead files
+   `ops/systemd/taosentinel-frontend.service`, `deploy/taosentinel-update.*` (no `auto-update.sh`),
+   `app/quant/dereg_events.py` (no caller). `README.md` still describes Phases 0–2.
+7. Disk: `data/tmp` 3.1 GB and `data/backfill/tmp` 2.4 GB of superseded DB copies; 4.9 GB uncompressed backup twin;
+   194 GB free.
+8. Git: only Phases 0–4 are committed; 41 modified + 152 untracked files (Phases 5–12, spec 19) on a public remote.
+9. The terminal's `config.toml` has no `[sentinel]` section → the spec 15 consumer is off although the feed is live.
+10. `wallet_dirs_found = 3` in the security self-check (the terminal's wallets share the host) — accepted deviation
+    from 16 §2.14; the terminal stays paper-only on this box.
+
+**Changed in this entry (docs only, no code, nothing written to the live DB):** `specs/20-consolidation-and-next-steps.md`
+(new: as-built record, work packages N0–N9, operator inputs in order, decision table, bloat inventory);
+`specs/INDEX.md` statuses for 06/07/08/13/17/16/19 corrected to the built state and the spec 20 row added;
+`CLAUDE.md` added at the repo root (session rules + live-system cautions). Nothing was restarted.
+
+## 2026-10-20 — spec 14 amendment: Telegram bot screens rebuilt for a phone + read-only `/wallet` view
+
+**Why:** the operator used the bot on a phone and found the screens "don't make much sense and look ugly", and asked for
+a wallet view (positions, PnL, performance, insights). Screenshots showed every `<pre>` table wrapping (rows of 37–75
+characters on a ≈ 34-character phone line), `⬅️ Menu` opening `/health`'s 57-row job table, and `/top` answering
+"No scores for ts-1.0 yet" while `/health` reported a score at 18:00Z.
+
+**Spec first:** 14 §2.7 (phone layout, navigation), §5 `TERMINAL_API_URL`, §8.4 (commands/callbacks), new §8.4a
+(wallet view), §8.5 (every read screen re-specified), §10 verify line, Changelog; 01 §5 inventory (658 keys);
+19 §1 non-goal clarified (the bot reads the terminal's API read-only; TaoSentinel stores no wallet data); INDEX row.
+
+**Reviewed against live data before building (findings):**
+1. `/top` empty: the 18:00Z provisional catch-up run (written 19:52Z after three `process_crash` recoveries at
+   19:44/19:57/20:11Z) has P1, P2, P3 and P5 null for most occupants → confidence median 0.09, 0/126 active rows reach
+   0.4, so the default feed filter hides everything. The 00:00Z official slot passed only 25/127. The bot now says
+   exactly that and offers `Show anyway`; **the scoring coverage drop itself is not fixed here** (open item: why the
+   chain/builder/product features were missing for those slots). Lead: `chain_features` failed at 19:53:35Z with
+   `RuntimeError: no snapshot for 2026-10-20T18:00:00Z (SSE and fallback both down, no repair yet)` — the crash loop
+   left no chain snapshot for that slot, so P1 could not be computed; cf. finding 4 of the 2026-10-18 audit.
+2. `/movers 7` empty: only two official slots exist (19 and 20 Oct). The screen now names the first official slot and
+   offers 1d/7d/30d buttons; 1d already shows real movers.
+3. The τ Terminal (127.0.0.1:8787) already serves everything the wallet view needs without a key for GETs:
+   `/api/wallets`, `/api/positions` (avg-cost positions, `sim_swap` exit value, unrealised/realised, emissions),
+   `/api/insights` (persona, trader score 1D/1W/1M/1Y, ~40 cards), `/api/trades` (≈ 0.9 MB for Main's 1,452 events,
+   under the 5 MB body cap; insights ≈ 0.7 s). `Http.request` exempts loopback hosts from provider buckets, so provider
+   id `terminal` needs no 02 §G1 row; the setting's validator keeps it loopback-only.
+4. The terminal's Insights `Volume` stat (11,519.8 τ for Main) is turnover — not shown (operator rule 2026-10-16).
+
+**Built:** `app/notifications/format.py` (phone helpers: `PRE_WIDTH`, `cells`, `spark`, `tao`, `pct`, tier/status
+dots, dates); `app/notifications/telegram.py` (home keyboard, `🏠 Home` everywhere, SN buttons on top/flags/movers,
+period buttons, wallet keyboards, `w:<view>:<arg>:<ref>` callbacks ≤ 64 bytes); `app/notifications/commands.py`
+(`render_home`; every read screen re-laid; `/menu`, `/home`, `/jobs`, `/wallet`; `HELP` grouped Look/Act; `USAGE` no
+longer indexes `HELP` by line number); new `app/notifications/wallet.py`; `app/api/queries.py`
+(`first_official_as_of`, `subnet_names`); `app/config.py` + `.env.example` (`TERMINAL_API_URL`).
+Mutation handlers (team/product/flag/owner/review resolve/pause/resume) and confirmation texts are unchanged.
+
+**Verified:** every screen rendered from the live DB (read-only shim) + live `/health` + live terminal: no `<pre>`
+line > 32 chars, every callback ≤ 64 bytes, every screen reaches `act:home`. Tests: `tests/notifications`
+(20, incl. home/navigation/phone-width over 25 screens, wallet list/overview/positions join/position card/performance/
+insights paging/trades paging/terminal down/off) and `tests/test_config.py` (loopback validator; inventory 658).
+
+**Operator:** `sudo systemctl restart taosentinel` to load the new bot (the running process never reloads code);
+then 14 §10's new Telegram verify line on the phone. Nothing was written to the live DB; the service was not restarted.

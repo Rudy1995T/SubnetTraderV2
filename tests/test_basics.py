@@ -51,14 +51,19 @@ def test_in_utc_windows():
 # ── mathutil ────────────────────────────────────────────────────────────────────────────────────────────────
 def test_mathutil():
     assert m.spearman_r([1, 2, 3, 4, 5], [5, 6, 7, 8, 7]) == pytest.approx(0.8207826816681233)
-    assert m.spearman_r([1, 2, 3], [3, 2, 1]) == pytest.approx(-1.0)
+    assert m.spearman_r([1, 2, 3, 4, 5], [5, 4, 3, 2, 1]) == pytest.approx(-1.0)
+    assert m.spearman_r([1, 2, 3], [3, 2, 1]) == 0.0           # verbatim port: n < 5 → 0.0
+    assert m._average_ranks([10, 20, 20, 5]) == [1.0, 2.5, 2.5, 0.0]   # 0-based, ties averaged
+    assert m.pearson_r([9, 9, 1, 2, 3, 4, 5], [1, 2, 3, 4, 5]) == pytest.approx(1.0)   # tail-aligned
     assert m.quantile_buckets([1, 2, 3, 4], 2) == [0, 0, 1, 1]
     z = m.zscore([1, 2, 3])
     assert z[1] == 0 and z[0] == pytest.approx(-z[2])
     assert m.zscore([5, 5]) == [0.0, 0.0]
     assert m.log_returns([1, math.e]) == pytest.approx([1.0])
     assert m.returns_pearson_r([1, 2, 4, 8], [1, 2, 4, 8]) == 0.0  # constant returns → zero variance
-    assert m.returns_pearson_r([1, 2, 3, 5, 4], [2, 4, 6, 10, 8]) == pytest.approx(1.0)
+    assert m.returns_pearson_r([1, 2, 3, 5, 4, 6], [2, 4, 6, 10, 8, 12]) == pytest.approx(1.0)
+    assert m.returns_pearson_r([1, 2, 3, 5, 4], [2, 4, 6, 10, 8]) == 0.0   # < 6 prices
+    assert m.effective_bets(-0.5, 10) == float("inf")
     assert m.effective_bets(0.0, 10) == 10 and m.effective_bets(1.0, 10) == 1
     assert m.gini_coefficient([1, 2, 3, 4]) == pytest.approx(0.25)
     assert m.gini_coefficient([5, 5, 5]) == pytest.approx(0.0)
@@ -69,6 +74,8 @@ def test_mathutil():
     assert m.monotone_score([1, 2, None, 3]) == 0.0
     assert m.rolling_volatility([1.0] * 30) == 0.0
     assert m.rolling_volatility([1.0]) is None
+    assert m.rolling_volatility([1.0, 2.0] * 13) == pytest.approx(
+        __import__("statistics").stdev([math.log(2), -math.log(2)] * 12) * math.sqrt(2190))   # annualised (4h bars)
 
 
 # ── logging ─────────────────────────────────────────────────────────────────────────────────────────────────
