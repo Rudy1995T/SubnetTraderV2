@@ -274,6 +274,15 @@ class P2Metrics:
         # org_freshness
         obs["org_freshness"] = await self._org_freshness(okey, occ, decl, decl_repo, alive, beyond, dead_state, now,
                                                          replay)
+        if replay and not dead:
+            # 13 §2.5: without a PIT repo snapshot, history approximates freshness by the last commit ≤ t; org
+            # freshness reads today's pushed_at (look-ahead), so it always does (17 §2.11 replay, 20 N2 item 2)
+            if obs["declared_repo_freshness"].status != "ok":
+                decl_ids = [int(decl["repo_id"])] if decl["kind"] == "repo" and decl["repo_id"] else []
+                obs["declared_repo_freshness"] = await self._last_commit_freshness("declared_repo_freshness",
+                                                                                   decl_ids, now)
+            obs["org_freshness"] = await self._last_commit_freshness(
+                "org_freshness", await scope_repo_ids(db, okey, include_declared_gone=True), now)
 
         # activity metrics over R(o) (+ the declared-gone repo during grace)
         rids = await scope_repo_ids(db, okey, include_declared_gone=not beyond)
@@ -335,6 +344,15 @@ class P2Metrics:
         return max(0.0, (now - r.pushed_at) / DAY), {
             "status": "ok", "repo": r.full_name, "pushed_at": to_iso(r.pushed_at), "archived": r.archived,
             "stars": r.stars, "kind": "repo" if r is decl_repo else "org_latest"}
+
+    async def _last_commit_freshness(self, key: str, rids: list[int], now: int) -> MetricObservation:
+        if not rids:
+            return failed(key, "never_observed")
+        last = await self.db.fetchval(f"SELECT MAX(event_at) FROM github_commits WHERE repo_id IN "
+                                      f"({','.join('?' * len(rids))}) AND event_at <= ?", [*rids, now])
+        if last is None:
+            return failed(key, "no_pit_commit", repos=len(rids))
+        return ok(key, max(0.0, (now - int(last)) / DAY), approx="last_commit", repos=len(rids))
 
     async def _org_freshness(self, okey: str, occ: "Occupant", decl: dict, decl_repo: RepoRow | None, alive: bool,
                              beyond: bool, dead_state: bool, now: int, replay: bool) -> MetricObservation:

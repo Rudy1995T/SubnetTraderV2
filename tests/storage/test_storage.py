@@ -17,7 +17,7 @@ from app.storage.pit import cross_section, latest_scores, metric_at, put_metric_
 # ── schema ──────────────────────────────────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_schema_counts(db):
-    assert db.schema_version == 4 == CODE_SCHEMA_VERSION   # 0004 github_repos.activity_ok_at, stats_checked_at (06)
+    assert db.schema_version == 5 == CODE_SCHEMA_VERSION   # 0005 rpc_subnet_daily.emission_share + view (20 N2.3)
     q = "SELECT COUNT(*) FROM sqlite_schema WHERE type = ? AND name NOT LIKE 'sqlite_%'"
     assert await db.fetchval(q, ("table",)) == 83   # 80 + 0003 wb_presets/wb_uploads/wb_dereg_network_hourly
     assert await db.fetchval(q, ("view",)) == 6

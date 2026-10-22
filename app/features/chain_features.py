@@ -107,14 +107,20 @@ async def snapshot_rows(db: "Database", as_of: int) -> dict[int, SnapshotRow]:
     for b in bars:
         d = await db.fetchone("SELECT * FROM chain_daily WHERE netuid = ? AND occupant_key = ? AND day_ts <= ? "
                               "ORDER BY day_ts DESC LIMIT 1", (b["netuid"], b["occupant_key"], as_of), writer=True)
+        # emission: 13's view (chain_daily ∪ 17's daily RPC share — dead occupants, pre-2025-11-17 TMC truncation;
+        # 20 N2 item 3), the latest row whose sample time is ≤ as_of
+        em = await db.fetchval("SELECT emission_share FROM v_quant_chain_daily WHERE netuid = ? AND occupant_key = ? "
+                               "AND ts <= ? ORDER BY day DESC LIMIT 1", (b["netuid"], b["occupant_key"], as_of),
+                               writer=True)
         blk = b["block_number"]
         if blk is None:
-            blk = await db.fetchval("SELECT block_number FROM block_times WHERE ts <= ? ORDER BY ts DESC LIMIT 1",
-                                    (as_of,), writer=True) if await _has_table(db, "block_times") else None
+            blk = await db.fetchval("SELECT block_number FROM block_times WHERE ts_ms <= ? ORDER BY ts_ms DESC "
+                                    "LIMIT 1", (as_of * 1000,), writer=True) if await _has_table(db, "block_times") \
+                else None
         mp = b["moving_price"]
         f = {"price": b["close"], "subnet_moving_price": mp,
              "tao_liquidity": b["tao_in_pool"] * 1e9 if b["tao_in_pool"] is not None else None,
-             "emission": d["emission_percent"] if d else None, "excess_tao": d["chain_buys"] if d else None,
+             "emission": em, "excess_tao": d["chain_buys"] if d else None,
              "is_active": int(bool(mp and mp > 0)), "emission_enabled": None, "block_number": blk}
         out[b["netuid"]] = SnapshotRow(b["netuid"], b["occupant_key"], target, "historical", b["ts_last"] or target,
                                        blk, f)
@@ -309,6 +315,9 @@ def p1_rows(rows: dict[int, SnapshotRow], fit: GateFit | None, fit_reason: str |
         elif n not in fit.adj:
             for k in ("gate_margin", "miner_burn_ok", "implied_miner_burn"):
                 put(occ, k, None, _fail(r, "not_eligible", "not_applicable"))
+        elif fit.theta <= 0:     # every moving price 0 (dTAO launch day, 17 replay): no margin is defined
+            for k in ("gate_margin", "miner_burn_ok", "implied_miner_burn"):
+                put(occ, k, None, _fail(r, "theta_undefined"))
         else:
             put(occ, "gate_margin", gate_margin_raw(fit, n), _ok(r, adj=fit.adj[n], theta=fit.theta))
             ib = fit.implied_burn.get(n)
@@ -615,7 +624,7 @@ async def run_slot(db: "Database", as_of: int, *, run_id: str, observed_at: int,
         from app.storage.events import emit_event
         consec = await _degraded_streak(db, as_of, s.GATE_MODEL_VERSION)
         pay = {"as_of": as_of, "residual_pp": plain.residual_pp, "theta": plain.theta, "n_eligible": len(E),
-               "consecutive_days": consec}
+               "consecutive_days": consec, **({"backfilled": True} if backfilled else {})}
         await emit_event(db, event_type="gate_fit_degraded", occupant_key=None, netuid=None, event_at=as_of,
                          observed_at=observed_at, payload=pay, dedupe_key=str(as_of), source="chain", run_id=run_id,
                          alerted_at=observed_at if backfilled else None)
@@ -623,8 +632,10 @@ async def run_slot(db: "Database", as_of: int, *, run_id: str, observed_at: int,
         if as_of % 86400 == 0 and consec >= s.GATE_BROKEN_AFTER_DAYS:
             await emit_event(db, event_type="gate_model_broken", occupant_key=None, netuid=None, event_at=as_of,
                              observed_at=observed_at, payload={"as_of": as_of, "consecutive_days": consec,
-                                                               "residual_pp": plain.residual_pp},
-                             dedupe_key=f"gate_model_broken|{observed_at // 604800}", source="chain", run_id=run_id)
+                                                               "residual_pp": plain.residual_pp,
+                                                               **({"backfilled": True} if backfilled else {})},
+                             dedupe_key=f"gate_model_broken|{observed_at // 604800}", source="chain", run_id=run_id,
+                             alerted_at=observed_at if backfilled else None)   # a replay never pages (17 §2.11)
             n_ev += 1
     if as_of % 86400 == 0 and not backfilled:
         await db.executemany(

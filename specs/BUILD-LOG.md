@@ -1292,3 +1292,109 @@ insights paging/trades paging/terminal down/off) and `tests/test_config.py` (loo
 
 **Operator:** `sudo systemctl restart taosentinel` to load the new bot (the running process never reloads code);
 then 14 §10's new Telegram verify line on the phone. Nothing was written to the live DB; the service was not restarted.
+
+## 2026-10-22 — Archive-RPC `gap` era re-run before the Blockmachine subscription lapses (spec 17 §2.3)
+
+**Why:** the Blockmachine plan expires ≈ 2026-10-25; the archive node is the only source that can refill hours the
+live SSE rollup missed. Hourly `pool_history`/`price_bars` from the archive ended at 2026-10-16 17:00Z (the last S4 run).
+
+**Live findings (1h `price_bars` since 2026-10-16 18:00Z, before the run):** live `sse_rollup` bars were missing for
+2026-10-17 00–11Z, 10-18 00–07Z, 10-18 21Z → 10-20 18Z (46 h) and 10-21 19Z → 10-22 09Z (host shut down 19:16Z–09:45Z);
+the overnight pattern matches the unmasked sleep targets (18 A1 / `ops/laptop-prep.sh` still not run). Those hours held
+only the ≈ 19 netuids that `tmc_weekly`'s rotating 1h-candle slice covers. The matching 5m buckets stay empty: no spec'd
+path refills 5m bars for arbitrary holes (`backfill_tmc candles5m` targets only the ledger→live gap).
+
+**Run:** `python -m scripts.backfill_rpc --era gap` twice (10:00Z and 10:01Z; the second picked up the hour that had
+just closed). 135 buckets 2026-10-16 18:00Z → 2026-10-22 08:00Z, 0 failed/skipped, 17,414 `pool_history` rows,
+709 Blockmachine requests (≈ 5 per bucket), post-process: occupancy 56 updated / 0 anomalies, bars 9,840 written,
+14,110 lower-rank skipped (live/TMC bars kept, 03 precedence), `owner_rpc_seed` re-armed.
+
+**Result:** every hour from 2025-02-14 to 2026-10-22 09:00Z has 1h bars for all live netuids except the 23 hours of the
+2025-05-20/22 chain halt (`no_block_in_hour`, skipped by design). Before the subscription lapses, re-run the same
+command once more to close the hours since this run; after it lapses, holes can only be refilled by `tmc_weekly`'s 1h
+candles. Still open and archive-dependent: spec 20 N2 item 3 (dead-occupant emission history, ≈ 600 archive calls,
+migration 0005 not built; `rpc_subnet_daily` is empty).
+
+## 2026-10-22 — spec 20 N2 item 3: dead-occupant emission history (`--emission-daily`, migration 0005)
+
+**Why now:** the only archive-dependent item left in N2, done before the Blockmachine plan lapses (≈ 2026-10-25).
+
+**Spec review against live data (before building):**
+1. DynamicInfo has no direct "emission share". `emission` is 0 at every runtime probed (deprecated). Probed 8 days
+   (2025-09-25 … 2026-10-15) against `chain_daily.emission_percent`; `tao_in_emission` / Σ over netuids ≠ 0 is the best
+   match (since 2025-12: per-day median |Δ| 0.0003–0.016 pp; `alpha_*_emission` and `pending_*` are far worse).
+   A few large subnets differ by 3–5 pp on a day (e.g. SN64 12.67 % TMC vs 7.22 % chain on 2026-08-01). It is not the
+   coinbase cap (no subnet had `alpha_in_emission = alpha_out_emission`); TMC's daily figure for them is not the
+   instantaneous injection share. Over all 34,554 overlapping occupant-days since 2025-12: median 0.058 pp, p90
+   0.94, p99 4.3.
+2. **TMC `emission_percent` was truncated to whole percent until 2025-11-16** (100 % integer rows in 2025-09/10,
+   54 % in 2025-11, decimals from 2025-11-17; SN43 0.92 % → 0, SN64 8.93 % → 8). 13 §11 item 7 read the resulting
+   70 % "zero-emission" rows in 2025-10 as Taoflow zeroing net-outflow subnets; the chain had `tao_in_emission = 0` for
+   6 of 129 netuids on 2025-10-01. Corrected in 13 §11 item 7.
+3. `rpc_subnet_daily` was empty (05's `chain_rpc_hourly` is off); its only reader (`chain_features` gate fit) filters
+   `miner_burned IS NOT NULL`, so backfilled rows cannot leak into the fit. `backfill_buckets.era` has a CHECK with the
+   three eras only, so the pass tracks progress from its own rows instead of widening the CHECK (a table rebuild).
+
+**Built:** migration `0005_rpc_emission_share.sql` (`rpc_subnet_daily.emission_share REAL`; `v_quant_chain_daily` =
+`chain_daily` with the RPC share in place of TMC's before 2025-11-17, ∪ RPC day rows for occupant-days `chain_daily`
+lacks); `rpc_backfill.emission_shares / plan_emission_days / process_emission_day / write_emission_day /
+run_emission_daily`; `scripts/backfill_rpc.py --emission-daily`; 4 tests in `tests/backfill/test_rpc.py`;
+`test_schema_counts` → v5. Specs amended: 03 (DDL, view, changelog), 05 (second writer), 13 (§2.3, §3.1, §11 items 7
+and 16), 17 (§2.3 daily pass), 20 (N2 item 3 as built), INDEX.
+
+**Fix found while running:** the first live run hit `database is locked` on 6 day writes (service write lock past the
+busy timeout). Both runners counted that toward endpoint failover, so the run left Blockmachine for public OnFinality
+(state discarded → 4 more failures) and finished on `archive.chain.opentensor.ai`. Local write errors no longer count
+(`NOT_ENDPOINT_ERRORS`, also applied to the hourly era runner); a re-run filled the 10 failed days on Blockmachine.
+
+**Run (live DB, dry run first on a backup-API copy):** 2026-10-22 10:48–10:56Z. Migration applied by the CLI
+(schema v5; the running service is on v4 code, which reads the view by name; restart picks up the new code). 616
+days 2025-02-14 → 2026-10-22, 0 failed after the re-run; 74,395 rows (`blockmachine` 71,835, `opentensor_archive`
+2,560); ≈ 2,960 requests; Σ share = 100.0 every day, no NULL shares. `v_quant_chain_daily`: 74,436 rows, 184
+occupants, 38,590 RPC-sourced. Dead (non-active) occupants with daily emission rows: 5 → 56 of 56. Share of
+survivorship-scope view rows ≤ 1e-4 %: 2025-09 5 %, 2025-10 2 %, 2025-11 4 % (was 66/70/40 %). 41 netuid-days have a
+different occupant in TMC and RPC (reoccupation days); both rows appear, each under its own occupant.
+
+**Still open (N2 item 5):** re-run the chain factor study / first verdict on a fresh `python -m app.quant snapshot`;
+`chain_daily_excludes_dead_occupants` should no longer fire. Operator: `sudo systemctl restart taosentinel` to put the
+service on schema-v5 code (no behaviour change for the service itself).
+
+## 2026-10-22 — spec 20 N2 items 1–2: 17 S9 `backfill_github` and S10 `replay_history` built (runs pending)
+
+**S9** (built in a parallel session from 17 §2.8; as-built deviations recorded in 17 §2.8): `app/backfill/github_backfill.py`,
+`scripts/backfill_github.py`, `tests/backfill/test_github_backfill.py` (7); 06 `activity.review_logins()` extracted (shared
+reviewer rule). Live API check (4 requests): the `/repositories/{id}/…` sub-paths work, `next` links keep the id form.
+Scope 114 occupants / 627 repos; no dead occupant has GitHub rows (P2 history is survivor-only). `tests/conftest.py`
+`AVAILABLE_BY_PHASE` 4→27 … 11→57; `python -m app check` → 57 declared / 57 available.
+
+**S10** `scripts/replay_history.py` (17 §2.11 as-built paragraph), `tests/backfill/test_replay_history.py` (4). Review of the
+owners' entry points against the live DB found five problems, fixed in the owners' code (specs 05/06 amended):
+1. 05 tier 3 took emission from `chain_daily` — no rows for dead occupants, TMC's whole-percent truncation before
+   2025-11-17, nothing before 2025-09-24. Now `v_quant_chain_daily` (migration 0005), PIT by `ts ≤ as_of`. On a copy of
+   the live DB, the 2025-10-01 slot gets `emission_share` for 41 dead occupants and the day sums to 99.95 % (was ≈ 61 %).
+2. 05 `run_slot(backfilled=1)` emitted `gate_model_broken` with `alerted_at` NULL: replaying the pre-v440 months (every
+   day degraded) would have paged the operator. Replay gate events now carry `payload.backfilled` and a preset
+   `alerted_at` (17 §2.11 contract).
+3. 05 tier 3 queried `block_times.ts` (the column is `ts_ms`) when a bar has no block number — latent, never hit live.
+4. 05 wrote `gate_margin` `ok` with a NULL value when θ = 0 (2025-02-14, every realised share 0) → 03's CHECK aborted
+   the slot. θ ≤ 0 now writes the gate keys `failed/theta_undefined`.
+5. 06 replay `org_freshness` read today's `pushed_at` (look-ahead), and `declared_repo_freshness` was `no_pit_snapshot`
+   for every day before 06's first repo snapshot (2026-10-17). Both now use 13 §2.5's approximation (days since the
+   last commit ≤ t); a PIT snapshot still wins for the declared repo.
+Also: integrity's batch path (`run_features`) is strict-mode only and joins today's `subnets` (today's owner key, no
+dead occupants), so the replay calls `compute_occupant(mode='reconstructed')` for the occupants alive at each slot and
+writes only `owner_commitment` and `control_stability_90d` (13 §2.5: the other P4 keys are forward-only). On the copy,
+`owner_commitment` is `failed/no_position` for every historical slot (no owner snapshot or SSE history before
+2026-08-25) and `control_stability_90d` is `ok` — as 13 §2.5 predicts ("partial").
+
+**Dry run on a backup-API copy:** 2025-02-14, 2025-05-21 (chain halt: no 23:00Z bar → 0 chain rows, honest), 2025-06-01,
+2025-10-01, 2026-09-01 — ≈ 2,000 chain + 256 integrity rows and ≈ 9 s per slot; no events emitted.
+
+**Not yet run on the live DB** (≈ 1.3 M append-only `metric_values` rows; the session's auto-mode classifier blocked
+the write as a shared-resource change, so it waits for the operator):
+1. `nice -n 10 .venv/bin/python -m scripts.replay_history --owners chain,integrity` (≈ 90 min, any time).
+2. `sudo systemctl restart taosentinel` (loads `backfill_github` + schema-v5 code), then
+   `nohup .venv/bin/python -m scripts.backfill_github > data/logs/backfill_github.out 2>&1 &` (sleeps until 00:30Z,
+   1–2 nights).
+3. After S9 reports done: `python -m scripts.replay_history --owners github`, then `--owners scoring` (N2 item 4), then
+   N2 item 5 (`python -m app.quant snapshot` → `report --run-all` → `gate`).

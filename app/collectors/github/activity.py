@@ -44,6 +44,19 @@ def parse_commit(item: dict, repo_id: int) -> CommitRow | None:
                      verified=None if ver is None else (1 if ver else 0), is_bot=bot, is_merge=n_par >= 2)
 
 
+def review_logins(reviews: Any, author: str | None) -> list[str]:
+    """§2.5 review rule (shared with 17's backfill): distinct non-bot users ≠ the PR author whose review state is
+    ``APPROVED|CHANGES_REQUESTED|COMMENTED``, in first-seen order."""
+    out: list[str] = []
+    for x in reviews if isinstance(reviews, list) else []:
+        u = x.get("user") or {}
+        lg = u.get("login")
+        if (x.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED") and lg and lg != author
+                and not authors.is_bot(lg, author_type=u.get("type")) and lg not in out):
+            out.append(lg)
+    return out
+
+
 @dataclass
 class RepoActivityResult:
     repo_id: int
@@ -196,19 +209,11 @@ class ActivityCollector:
             if key in have:
                 continue                                  # stored PRs are not re-fetched (17's key too)
             author = (p.get("user") or {}).get("login")
-            reviewers: list[str] = []
             try:
                 rv = await self._get(f"/repositories/{rid}/pulls/{p['number']}/reviews", params={"per_page": 100})
             except GitHubUnavailable:
                 continue
-            if rv.status == 200 and isinstance(rv.json, list):
-                for x in rv.json:
-                    u = x.get("user") or {}
-                    lg = u.get("login")
-                    if (x.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED") and lg and lg != author
-                            and not authors.is_bot(lg, author_type=u.get("type"))):
-                        if lg not in reviewers:
-                            reviewers.append(lg)
+            reviewers = review_logins(rv.json if rv.status == 200 else None, author)
             out.append((rid, "pr_merged", iso_ts(p["merged_at"]), key,
                         {"number": p["number"], "author_login": author, "review_count": len(reviewers),
                          "reviewers": reviewers,

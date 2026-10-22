@@ -104,7 +104,8 @@ async def test_control_routes(rt, app_client, settings_override, tmp_root):
         await asyncio.sleep(0.2)
         n = await rt.db.fetchval("SELECT COUNT(*) FROM collector_runs WHERE job='log_retention_daily'", writer=True)
         assert n == 1
-        unbuilt = sorted(rt.unavailable)[0]          # a declared row whose module is not built (17's backfill_github)
+        # a declared row whose module is not built (none since 17's backfill_github landed 2026-10-22) or no row at all
+        unbuilt = sorted(rt.unavailable)[0] if rt.unavailable else "no_such_job"
         assert (await app_client.post(f"/api/v1/control/run/{unbuilt}", headers=H)).status_code == 404  # not built
         r = await app_client.post("/api/v1/control/run/registry_occupants", headers=H)                      # disabled
         assert r.status_code == 409 and r.json()["detail"] == "disabled"
@@ -172,8 +173,8 @@ def test_cli(tmp_path):
     assert r.returncode == 0 and len([l for l in r.stdout.splitlines()[1:] if l.strip()]) == 57
     r = _cli(tmp_path, "run-job", "log_retention_daily")
     assert r.returncode == 0, r.stdout + r.stderr
-    r = _cli(tmp_path, "run-job", "backfill_github")
-    assert r.returncode == 1 and "unavailable" in r.stdout
+    r = _cli(tmp_path, "run-job", "no_such_job")            # every declared job is built since 2026-10-22
+    assert r.returncode != 0
     r = _cli(tmp_path, "db", "retention", "--dry-run")
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)

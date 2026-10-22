@@ -1119,7 +1119,8 @@ CREATE TABLE IF NOT EXISTS price_bars (
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS ix_price_bars_occ ON price_bars(occupant_key, period, ts) WHERE occupant_key IS NOT NULL;
 
--- class: append. Optional RPC/lite-node daily reads (05 §2 optional collector). Owner: 05.
+-- class: append. Optional RPC/lite-node daily reads (05 §2 optional collector; as_of = 6-h slot, source 'rpc_storage')
+-- and 17's daily emission pass (`--emission-daily`; as_of = day_ts 00:00Z, source = the archive endpoint). Owner: 05.
 CREATE TABLE IF NOT EXISTS rpc_subnet_daily (
   netuid            INTEGER NOT NULL,
   as_of             INTEGER NOT NULL,
@@ -1134,6 +1135,7 @@ CREATE TABLE IF NOT EXISTS rpc_subnet_daily (
   emission_enabled  INTEGER CHECK (emission_enabled IN (0,1)),
   moving_price      REAL,
   endpoint          TEXT,
+  emission_share    REAL,                     -- migration 0005: % = 100·tao_in_emission/Σ netuids ≠ 0 (17 only)
   PRIMARY KEY (netuid, as_of)
 ) STRICT, WITHOUT ROWID;
 
@@ -2339,10 +2341,24 @@ FROM chain_hourly;
 
 -- 13 §3.1: emission_share = TMC emission_percent; tao_in_pool = subnet_tao / 1e9 (subnet_tao is rao — verified
 -- against the research probe's 1Y analytics dump for SN51; same redefinition rule as above).
-CREATE VIEW IF NOT EXISTS v_quant_chain_daily AS
-SELECT occupant_key, netuid, day_ts AS day, event_at AS ts, block_number,
-       emission_percent AS emission_share, subnet_tao / 1e9 AS tao_in_pool, observed_at, backfilled, source
-FROM chain_daily;
+-- Redefined by migration 0005 (2026-10-22, 20 N2 item 3): chain_daily rows plus one rpc_subnet_daily day row per
+-- occupant-day that chain_daily lacks (dead occupants); before 2025-11-17 (TMC emission_percent truncated to whole
+-- percent) the RPC share replaces TMC's where one exists. RPC-only rows: tao_in_pool NULL, backfilled 1.
+CREATE VIEW v_quant_chain_daily AS
+SELECT c.occupant_key, c.netuid, c.day_ts AS day, c.event_at AS ts, c.block_number,
+       CASE WHEN c.day_ts < 1763337600 AND r.emission_share IS NOT NULL THEN r.emission_share
+            ELSE c.emission_percent END AS emission_share,
+       c.subnet_tao / 1e9 AS tao_in_pool, c.observed_at, c.backfilled,
+       CASE WHEN c.day_ts < 1763337600 AND r.emission_share IS NOT NULL THEN r.source ELSE c.source END AS source
+FROM chain_daily c
+LEFT JOIN rpc_subnet_daily r ON r.netuid = c.netuid AND r.as_of = c.day_ts AND r.occupant_key = c.occupant_key
+UNION ALL
+SELECT r.occupant_key, r.netuid, r.as_of AS day, r.event_at AS ts, r.block_number, r.emission_share,
+       NULL AS tao_in_pool, r.observed_at, 1 AS backfilled, r.source
+FROM rpc_subnet_daily r
+WHERE r.emission_share IS NOT NULL AND r.as_of % 86400 = 0
+  AND NOT EXISTS (SELECT 1 FROM chain_daily c
+                  WHERE c.netuid = r.netuid AND c.day_ts = r.as_of AND c.occupant_key = r.occupant_key);
 
 -- registered_ts: exact (17 block_times) when known, else 04's estimate; registered_ts_exact says which.
 CREATE VIEW IF NOT EXISTS v_quant_occupants AS
@@ -2840,7 +2856,7 @@ Restore runbook: owned by spec 16 (§2.8 `python -m app backup restore <stamp>`,
 | 10 | `post_labels` times TEXT | INTEGER; + `source` |
 | 13 | `price_bars.bucket_start` | `ts` (served as `bucket_start` by `v_quant_price_bars`) |
 | 13 | `chain_hourly.hour, tao_in_pool, moving_price, volume` | `v_quant_chain_hourly` (over `hour_ts, tao_liquidity, subnet_moving_price, volume_24h`) |
-| 13 | `chain_daily.day, ts, emission_share, tao_in_pool` | `v_quant_chain_daily` (over `day_ts, event_at, emission_percent, subnet_tao/1e9`) |
+| 13 | `chain_daily.day, ts, emission_share, tao_in_pool` | `v_quant_chain_daily` (over `day_ts, event_at, emission_percent, subnet_tao/1e9`; since migration 0005 also `rpc_subnet_daily` day rows: `as_of, event_at, emission_share`) |
 | 13 | `occupants.registered_ts` | column `registered_ts` (exact, 17) + `registered_at_est` (04 estimate); `v_quant_occupants.registered_ts` = COALESCE of both |
 | 13 | `scores.computed_at` | `computed_at` (kept; 12's name) |
 | 13 | `regime_daily.day`, `market_regime` | `day_ts`, `label` (+ `v_w`, `inputs_json`; 02 §B8, §J2) |
@@ -2923,4 +2939,4 @@ Restore runbook: owned by spec 16 (§2.8 `python -m app backup restore <stamp>`,
 - 2026-09-24 final pass: §3.9 routing/dedupe — `x_budget_paused` is digest for every reason (D4); 07's eight web patterns are `occ|url|…` (global dedupe index, 07 §11 Q14); 10's label-event "topic hash" slot is the polarity bucket `pos|neg|neu`; `source_disagreement` emitters split (04 non-GitHub identity fields, 06 `github_repo` only); `disk_critical`/`db_integrity_failed`/`backup_failed` route `yes`, with a direct `send_alert` only as the D3 DB-write-failure fallback (the `direct` alert value is retired).
 - 2026-09-24 final pass: `github_events` gains `backfilled INTEGER NOT NULL DEFAULT 0` (J1); `backfill_done`/`backfill_failed` are written with `source='runtime'`.
 - 2026-09-24 final pass: §2.5 `pool_history` row — stamping `occupant_key` never sets `enriched_at` (matches §2.9 and the column comment); `price_bars` comment states that `sse_rollup` covers both the 5m bars and 05's live `1h` rollup (the CHECKs already allowed it).
-
+- 2026-10-22 (20 N2 item 3, BUILD-LOG 2026-10-22): migration `0005_rpc_emission_share.sql` (additive) — `rpc_subnet_daily.emission_share REAL` (written by 17's `--emission-daily` pass, one row per netuid per day, `as_of` = day 00:00Z, `source` = the archive endpoint) and `v_quant_chain_daily` redefined as `chain_daily` ∪ RPC day rows for occupant-days `chain_daily` lacks, with the RPC share replacing TMC's whole-percent-truncated value before 2025-11-17. Schema v5.

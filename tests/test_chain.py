@@ -389,3 +389,37 @@ async def test_sse_unauthorized_fallback(rt, monkeypatch):
         assert table.called and task.fallback_state == "polling" and task.last_attempt is not None
         assert await rt.db.fetchval("SELECT COUNT(*) FROM chain_ticks WHERE source = 'rest_table'") == 129
         task.fallback_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_historical_tier_reads_view_and_theta_zero(db):
+    """20 N2 item 2: tier 3 takes emission from v_quant_chain_daily (17's RPC share for dead occupants and in place of
+    TMC's whole-percent values before 2025-11-17), PIT by sample time; θ = 0 (all moving prices 0) fails the gate
+    keys instead of writing ok/NULL (the CHECK the dTAO launch-day replay hit)."""
+    as_of = 1_763_251_200                       # 2025-11-16T00:00Z, before the truncation cutoff
+    prev = as_of - 86400
+    for n, k in ((5, "5:50"), (9, "9:90")):
+        await db.execute("INSERT INTO price_bars (netuid, period, ts, occupant_key, open, high, low, close, "
+                         "moving_price, tao_in_pool, source, observed_at) VALUES (?, '1h', ?, ?, 1, 1, 1, 1, 0, 1000, "
+                         "'blockmachine', 1)", (n, as_of - 3600, k))
+    await db.execute("INSERT INTO chain_daily (netuid, day_ts, occupant_key, event_at, observed_at, source, "
+                     "emission_percent) VALUES (5, ?, '5:50', ?, 1, 'analytics_1y', 2.0)", (prev, prev))
+    for n, k, d, v in ((5, "5:50", prev, 2.7), (9, "9:90", prev, 0.4), (9, "9:90", as_of, 9.9)):
+        await db.execute("INSERT INTO rpc_subnet_daily (netuid, as_of, occupant_key, event_at, observed_at, source, "
+                         "emission_share) VALUES (?, ?, ?, ?, 1, 'blockmachine', ?)", (n, d, k, d + 3540, v))
+    snap = await snapshot_rows(db, as_of)
+    assert snap[5].kind == "historical" and snap[5].f["emission"] == 2.7      # RPC replaces TMC's truncated 2.0
+    assert snap[9].f["emission"] == 0.4                                       # dead occupant; 00:59Z sample unseen
+    # θ = 0: live moving prices, every emission share 0 (as on 2025-02-14)
+    t2 = as_of + 10 * 86400
+    for n, k in ((5, "5:50"), (9, "9:90")):
+        await db.execute("INSERT INTO price_bars (netuid, period, ts, occupant_key, open, high, low, close, "
+                         "moving_price, tao_in_pool, source, observed_at) VALUES (?, '1h', ?, ?, 1, 1, 1, 1, 0.01, "
+                         "1000, 'blockmachine', 1)", (n, t2 - 3600, k))
+        await db.execute("INSERT INTO rpc_subnet_daily (netuid, as_of, occupant_key, event_at, observed_at, source, "
+                         "emission_share) VALUES (?, ?, ?, ?, 1, 'blockmachine', 0.0)", (n, t2 - 86400, k, t2 - 82860))
+    rep = await run_slot(db, t2, run_id="h", observed_at=t2 + 60, backfilled=1)
+    gm = await db.fetchall("SELECT value, json_extract(value_json, '$.reason') AS reason FROM metric_values "
+                           "WHERE metric_key = 'gate_margin' AND as_of = ?", (t2,))
+    assert rep.fit is not None and rep.fit.theta == 0
+    assert len(gm) == 2 and all(r["value"] is None and r["reason"] == "theta_undefined" for r in gm)

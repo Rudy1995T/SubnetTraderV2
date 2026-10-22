@@ -254,6 +254,14 @@ async def test_replay_admits_backfilled_and_coverage_gate(db):
     res = await calc.compute(occ, NOW, replay=True, coverage=lambda rid, t: True)
     o = {x.metric_key: x for x in res.observations}
     assert o["active_authors_28d"].value == 1 and o["declared_repo_freshness"].value == pytest.approx(5.0)
+    # 13 §2.5: org freshness in a replay is the last commit ≤ t (today's pushed_at would be look-ahead) …
+    assert o["org_freshness"].value == pytest.approx(10.0) and o["org_freshness"].detail["approx"] == "last_commit"
+    # … and so is the declared repo's when no PIT snapshot precedes t
+    early = {x.metric_key: x for x in (await calc.compute(occ, NOW - 6 * DAY, replay=True,
+                                                          coverage=lambda rid, t: True)).observations}
+    assert early["declared_repo_freshness"].value == pytest.approx(4.0)
+    assert (await calc.compute(occ, NOW - 11 * DAY, replay=True, coverage=lambda rid, t: True)).observations[
+        [x.metric_key for x in res.observations].index("org_freshness")].reason == "no_pit_commit"
     res2 = await calc.compute(occ, NOW, replay=True, coverage=lambda rid, t: False)
     assert {x.metric_key: x for x in res2.observations}["bus_factor"].reason == "backfill_incomplete"
     rows = M.metric_rows(okey, res.observations, as_of=D, now=NOW, run_id="rp", backfilled=True)

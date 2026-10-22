@@ -16,7 +16,7 @@ IDS = ("github_resolve", "github_org_enum", "github_activity", "github_metrics",
 async def test_registry_has_the_five_jobs(rt):
     JobRegistry.build(rt)
     assert set(IDS) <= set(rt.jobs)
-    assert "backfill_github" in rt.unavailable                       # 17's S9 job, not part of 06
+    assert "backfill_github" in rt.jobs and "backfill_github" not in rt.unavailable    # 17's S9 job (built 20 N2)
     assert SPEC_BY_ID["github_metrics"].catchup_avoid_utc == ("18:00-23:30",)
     from app.jobs import spec_liveness_max_age
     assert spec_liveness_max_age(SPEC_BY_ID["github_resolve"]) == 45120

@@ -279,3 +279,74 @@ def test_api_price_method_tolerance():
     assert rb.api_price_method(e, round(ratio, 9)) == "reserve_ratio"          # rao-rounded ratio
     assert rb.api_price_method(e, 0.064653121) == "swap_sqrt"
     assert rb.api_price_method(e, None) == "reserve_ratio"
+
+
+# ── spec 20 N2 item 3: daily emission share ──────────────────────────────────────────────────────────────────
+def test_emission_shares():
+    sh = rb.emission_shares([{"netuid": 0, "tao_in_emission": 5}, {"netuid": 1, "tao_in_emission": 3},
+                             {"netuid": 2, "tao_in_emission": 1}, {"netuid": 3, "tao_in_emission": 0}])
+    assert 0 not in sh and sh[1] == 75.0 and sh[2] == 25.0 and sh[3] == 0.0             # root excluded from Σ
+    assert rb.emission_shares([{"netuid": 4, "tao_in_emission": 0}]) == {4: None}       # Σ = 0 → unknown
+
+
+def test_process_emission_day(monkeypatch):
+    chain = FakeChain()
+    gw = make_gateway(chain)
+
+    async def dyn(h, spec, *, meta_hash_fn):
+        return [{**GOLDEN, "tao_in_emission": 3 * 10 ** 7}, None,
+                {**GOLDEN, "netuid": 7, "network_registered_at": 99, "tao_in_emission": 10 ** 7,
+                 "moving_price": {"bits": 2 ** 31}},
+                {**GOLDEN, "netuid": 0, "tao_in_emission": 0}]
+    monkeypatch.setattr(gw, "dynamic_info", dyn)
+    s = rb.BlockSampler([(b, chain.ts(b)) for b in range(6999000, 7001000, 100)])
+    day = (chain.ts(7000000) // 86400) * 86400
+    res = run(rb.process_emission_day(gw, s, day, offset=60, run_id="r"))
+    assert res.status == "done" and day <= res.block_ts < day + 3600                    # first hour of the day
+    by = {r["netuid"]: r for r in res.rows}
+    assert set(by) == {64, 7}                                                           # root and None skipped
+    assert by[64]["emission_share"] == 75.0 and by[7]["emission_share"] == 25.0
+    assert by[7]["occupant_key"] == "7:99" and by[7]["moving_price"] == 0.5 and by[7]["as_of"] == day
+    assert by[64]["source"] == gw.endpoint.source and by[64]["event_at"] == res.block_ts
+
+
+def _day_rows(day: int, rows: list[tuple[int, str, float | None]], source: str = "blockmachine") -> rb.EmissionDay:
+    res = rb.EmissionDay(day_ts=day, status="done", endpoint="blockmachine", block_number=9000000,
+                         block_ts=day + 3540, block_times=[(9000000, (day + 3540) * 1000)])
+    res.rows = [{"netuid": n, "as_of": day, "occupant_key": k, "block_number": 9000000, "observed_at": 1,
+                 "event_at": day + 3540, "source": source, "run_id": "r", "moving_price": None,
+                 "endpoint": "blockmachine", "emission_share": v} for n, k, v in rows]
+    return res
+
+
+def test_plan_emission_days(bf):
+    first = (rb.DTAO_LAUNCH_TS // 86400 + 1) * 86400
+    now = first + 5 * 86400 + 3 * 3600                                                  # day 5's first hour closed
+    days = rb.plan_emission_days(bf, now=now)
+    assert days == [first + i * 86400 for i in range(6)]
+    assert rb.plan_emission_days(bf, now=first + 5 * 86400 + 3600)[-1] == first + 4 * 86400   # not yet closed 1 h
+    rb.write_emission_day(bf, _day_rows(first + 86400, [(1, "1:10", 50.0)]), run_id="r")
+    bf.execute("INSERT INTO rpc_subnet_daily (netuid, as_of, occupant_key, observed_at, source) "
+               "VALUES (1, ?, '1:10', 1, 'rpc_storage')", (first + 2 * 86400,))             # live collector row
+    again = rb.plan_emission_days(bf, now=now)
+    assert first + 86400 not in again and first + 2 * 86400 in again and len(again) == 5
+
+
+def test_v_quant_chain_daily_union(bf):
+    cutoff = 1763337600                                                                 # 2025-11-17: TMC decimals
+    pre, post = cutoff - 86400, cutoff + 86400
+    for day, pct in ((pre, 2.0), (post, 2.4)):
+        bf.execute("INSERT INTO chain_daily (netuid, day_ts, occupant_key, event_at, observed_at, source, "
+                   "emission_percent, subnet_tao) VALUES (5, ?, '5:50', ?, 1, 'analytics_1y', ?, 3e12)",
+                   (day, day, pct))
+    for day in (pre, post):                                                             # 5 alive, 9 later dead
+        assert rb.write_emission_day(bf, _day_rows(day, [(5, "5:50", 2.71), (9, "9:90", 0.42)]), run_id="r") == 2
+    bf.execute("INSERT INTO rpc_subnet_daily (netuid, as_of, occupant_key, observed_at, source, emission_share) "
+               "VALUES (9, ?, '9:90', 1, 'rpc_storage', 7.0)", (post + 21600,))           # a 06:00Z slot row
+    got = {(r[0], r[1]): r[2:] for r in bf.execute(
+        "SELECT occupant_key, day, emission_share, tao_in_pool, backfilled, source FROM v_quant_chain_daily")}
+    assert got[("5:50", pre)] == (2.71, 3000.0, 0, "blockmachine")                      # truncated TMC → RPC
+    assert got[("5:50", post)] == (2.4, 3000.0, 0, "analytics_1y")                      # TMC kept
+    assert got[("9:90", pre)] == (0.42, None, 1, "blockmachine")                        # dead occupant now covered
+    assert got[("9:90", post)] == (0.42, None, 1, "blockmachine")
+    assert len(got) == 4                                                                # slot row not a day row

@@ -5,6 +5,10 @@ block), read ``SubnetInfoRuntimeApi_get_all_dynamic_info`` raw, decode with the 
 (``auto``: ``AlphaSqrtPrice²`` while the Swap map has keys, else the reserve ratio — verified 2026-09-24: the map
 exists at block 8,443,757 and is gone by 9,000,000, where the SDK price equals the reserve ratio), convert, and write
 ``pool_history`` + ``rpc_owner_history`` + ``block_times`` + ``backfill_buckets`` in ONE transaction.
+
+``--emission-daily`` (spec 20 N2 item 3): one cross-section per UTC day at the first-hour block → ``rpc_subnet_daily``
+(``emission_share`` = 100 · ``tao_in_emission`` / Σ over netuids ≠ 0, ``moving_price``) for every occupant alive that
+day, dead ones included; resumable from its own rows (``backfill_buckets.era`` has no value for it).
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ GOLDEN_ANCHORS: tuple[tuple[int, int], ...] = ((4920351, 1739482884), (6502594, 
 ERAS = ("gap", "ledger", "pre_ledger")
 SWAP_SQRT_PREFIX = storage_prefix("Swap", "AlphaSqrtPrice")
 DECODE_STOP_AFTER = 10
+NOT_ENDPOINT_ERRORS = ("block_search", "DecodeError", "no_runtime_api", "write:")   # never trigger failover
 
 
 class BlockSearchFailed(RuntimeError):
@@ -723,8 +728,8 @@ async def run_era(era: str, *, step: int | None = None, force_unprobed: bool = F
                         rep.skipped += 1
                     else:
                         rep.failed += 1
-                        # only endpoint trouble counts toward failover (not block search / decode / missing API)
-                        if not (res.error or "").startswith(("block_search", "DecodeError", "no_runtime_api")):
+                        # only endpoint trouble counts toward failover (NOT_ENDPOINT_ERRORS)
+                        if not (res.error or "").startswith(NOT_ENDPOINT_ERRORS):
                             state["consec_failed"] += 1
                         logger.warning("bucket failed", data={"era": era, "bucket": to_iso(bkt.bucket_ts),
                                                               "error": (res.error or "")[:200]})
@@ -755,6 +760,211 @@ async def run_era(era: str, *, step: int | None = None, force_unprobed: bool = F
             rep.exit_code = common.EXIT_INTERRUPTED
         if state.get("trigger_aborts"):
             rep.exit_code = rep.exit_code or common.EXIT_VERIFY
+        logger.info("backfill_rpc era finished", data={**rep.__dict__, "stats": rpc.stats()})
+        return rep
+    finally:
+        rep.seconds = round(time.monotonic() - t0, 1)
+        con.close()
+
+
+# ── daily emission share (spec 20 N2 item 3) ─────────────────────────────────────────────────────────────────
+EMISSION_SOURCE_LIVE = "rpc_storage"     # chain_rpc_hourly's rows; never counted as this pass's work
+
+
+def emission_shares(entries: Iterable[dict]) -> dict[int, float | None]:
+    """``100 · tao_in_emission / Σ`` over netuids ≠ 0 (TMC ``emission_percent`` scale); ``None`` when Σ = 0."""
+    vals = {int(e["netuid"]): int(e.get("tao_in_emission") or 0) for e in entries if int(e["netuid"]) != 0}
+    tot = sum(vals.values())
+    return {n: (100.0 * v / tot if tot > 0 else None) for n, v in vals.items()}
+
+
+def plan_emission_days(con: sqlite3.Connection, *, now: int, from_ts: int | None = None,
+                       to_ts: int | None = None) -> list[int]:
+    """Day starts from the first full day after dTAO launch (the launch day's first hour predates the runtime API)
+    whose first hour closed ≥ 1 h ago and that hold no row of this pass."""
+    a = (DTAO_LAUNCH_TS // 86400 + 1) * 86400
+    b = ((now - 7200) // 86400) * 86400 + 86400
+    if from_ts is not None:
+        a = max(a, (from_ts // 86400) * 86400)
+    if to_ts is not None:
+        b = min(b, to_ts)
+    have = {r[0] for r in con.execute("SELECT DISTINCT as_of FROM rpc_subnet_daily WHERE source <> ? AND as_of >= ? "
+                                      "AND as_of < ?", (EMISSION_SOURCE_LIVE, a, b))}
+    return [d for d in range(a, b, 86400) if d not in have]
+
+
+@dataclass
+class EmissionDay:
+    day_ts: int
+    status: str = "failed"
+    block_number: int | None = None
+    block_ts: int | None = None
+    endpoint: str | None = None
+    rows: list[dict] = field(default_factory=list)
+    block_times: list[tuple[int, int]] = field(default_factory=list)
+    spec_version: int | None = None
+    error: str | None = None
+
+
+async def process_emission_day(rpc: RpcGateway, sampler: BlockSampler, day_ts: int, *, offset: int,
+                               run_id: str) -> EmissionDay:
+    """The block nearest ``hour(day_ts) + 3600 − offset`` inside that hour (17 §2.3 search), then DynamicInfo."""
+    res = EmissionDay(day_ts=day_ts, endpoint=rpc.endpoint.label)
+    hour = (day_ts // 3600) * 3600
+    try:
+        loc = await locate_block(rpc, sampler, hour, step=3600, offset=offset, seen=res.block_times)
+    except BlockSearchFailed as exc:
+        res.error = f"block_search: {exc}"
+        return res
+    if loc is None:
+        res.status, res.error = "skipped", "no_block_in_hour"
+        return res
+    b, h, ts_ms = loc
+    ts = ts_ms // 1000
+    res.block_number, res.block_ts = b, ts
+    spec = await rpc.runtime_version(h)
+    res.spec_version = spec
+    try:
+        entries = await rpc.dynamic_info(h, spec, meta_hash_fn=lambda: rpc.block_hash(b + 1))
+    except NoRuntimeApi as exc:
+        res.status, res.error = "skipped", f"no_runtime_api: {str(exc)[:120]}"
+        return res
+    entries = [e for e in entries if e is not None]
+    shares = emission_shares(entries)
+    observed = now_ts()
+    as_of = (day_ts // 86400) * 86400
+    for e in entries:
+        n = int(e["netuid"])
+        if n == 0:
+            continue
+        mp = _bits(e.get("moving_price"))
+        res.rows.append({"netuid": n, "as_of": as_of, "occupant_key": f"{n}:{int(e['network_registered_at'])}",
+                         "block_number": b, "observed_at": observed, "event_at": ts, "source": rpc.endpoint.source,
+                         "run_id": run_id, "moving_price": (mp / 2 ** 32) if mp is not None else None,
+                         "endpoint": rpc.endpoint.label, "emission_share": shares.get(n)})
+    res.status = "done"
+    return res
+
+
+_EMISSION_COLS = ("netuid", "as_of", "occupant_key", "block_number", "observed_at", "event_at", "source", "run_id",
+                  "moving_price", "endpoint", "emission_share")
+
+
+def write_emission_day(con: sqlite3.Connection, res: EmissionDay, *, run_id: str) -> int:
+    """ONE transaction: block_times + ``rpc_subnet_daily`` (INSERT OR IGNORE: append-only, first success wins)."""
+    n = 0
+    with common.tx(con):
+        now = now_ts()
+        for b, ms in res.block_times:
+            con.execute("INSERT OR IGNORE INTO block_times (block_number, ts_ms, endpoint, observed_at, run_id) "
+                        "VALUES (?,?,?,?,?)", (b, ms, res.endpoint, now, run_id))
+        if res.status == "done":
+            ph = ",".join("?" * len(_EMISSION_COLS))
+            for r in res.rows:
+                cur = con.execute(f"INSERT OR IGNORE INTO rpc_subnet_daily ({','.join(_EMISSION_COLS)}) "
+                                  f"VALUES ({ph})", [r[c] for c in _EMISSION_COLS])
+                n += max(0, cur.rowcount)
+    return n
+
+
+async def run_emission_daily(*, force_unprobed: bool = False, endpoint_override: str | None = None,
+                             from_block: int | None = None, to_block: int | None = None, limit: int | None = None,
+                             db_path: Path | None = None, run_id: str | None = None,
+                             gateway: RpcGateway | None = None) -> EraReport:
+    """Plan → fetch (bounded concurrency) → write per day. ``failed`` and ``skipped`` days are retried next run."""
+    from app.ratelimit import ProviderLimiter
+    s = common.settings()
+    rep = EraReport(era="emission_daily")
+    t0 = time.monotonic()
+    run_id = run_id or f"script:backfill_rpc:emission_daily:{now_ts()}"
+    con = common.open_db(db_path)
+    try:
+        rpc = gateway or RpcGateway(endpoints_from_settings(s, endpoint_override), ProviderLimiter.from_settings(),
+                                    timeout=s.BACKFILL_RPC_TIMEOUT_SEC, max_attempts=s.BACKFILL_RPC_MAX_ATTEMPTS,
+                                    backoff_max=s.ARCHIVE_BACKOFF_MAX_SEC,
+                                    cooldown_sec=s.SUBTENSOR_ENDPOINT_COOLDOWN_SEC,
+                                    public_max_rps=s.BACKFILL_RPC_PUBLIC_MAX_RPS, spend=common.SpendBook(db_path))
+        if not force_unprobed and not probe_passed(rpc.endpoint.label, s.BACKFILL_RPC_MODE):
+            raise common.PreconditionError(
+                f"no passing probe for endpoint {rpc.endpoint.label!r} (run --probe, or --force-unprobed)",
+                code=common.EXIT_VERIFY)
+        sampler = BlockSampler(load_anchors(con, s.LEDGER_LIVE_FROM_TS))
+        from_ts = sampler.ts_at(from_block) if from_block is not None else None
+        to_ts = sampler.ts_at(to_block) if to_block is not None else None
+        days = plan_emission_days(con, now=now_ts(), from_ts=from_ts, to_ts=to_ts)
+        if limit is not None:
+            days = days[:limit]
+        rep.planned = len(days)
+        if days:
+            rep.from_ts, rep.to_ts = days[0], days[-1] + 86400
+        logger.info("backfill_rpc emission_daily planned", data={"days": len(days), "endpoint": rpc.endpoint.label,
+                                                                 "from": to_iso(rep.from_ts), "to": to_iso(rep.to_ts)})
+        if not days:
+            return rep
+        conc = s.BACKFILL_RPC_CONCURRENCY or (4 if rpc.endpoint.kind in ("blockmachine", "onfinality") else 1)
+        write_lock = asyncio.Lock()
+        queue: asyncio.Queue[int] = asyncio.Queue()
+        for d in days:
+            queue.put_nowait(d)
+        state = {"consec_failed": 0, "stop": None, "last_log": time.monotonic()}
+
+        async def worker() -> None:
+            while not queue.empty():
+                if state["stop"] is not None:
+                    return
+                if common.stop_requested():
+                    state["stop"] = "signal" if common.signalled() else "pause_all"
+                    return
+                d = queue.get_nowait()
+                try:
+                    if rpc.endpoint.kind == "archive":
+                        await asyncio.sleep(s.ARCHIVE_MIN_BUCKET_INTERVAL_SEC)
+                    res = await process_emission_day(rpc, sampler, d, offset=s.BACKFILL_RPC_SAMPLE_OFFSET_SEC,
+                                                     run_id=run_id)
+                except asyncio.CancelledError:
+                    t = asyncio.current_task()
+                    if t is not None and t.cancelling():
+                        raise
+                    res = EmissionDay(day_ts=d, endpoint=rpc.endpoint.label,
+                                      error="CancelledError: leaked from the transport")
+                except Exception as exc:  # one bad day never aborts the pass
+                    if not isinstance(exc, (RateLimited, RpcError, DecodeError, asyncio.TimeoutError)):
+                        logger.error("emission day crashed", data={"day": d, "error": repr(exc)[:300]})
+                    res = EmissionDay(day_ts=d, endpoint=rpc.endpoint.label,
+                                      error=f"{type(exc).__name__}: {str(exc)[:300]}")
+                async with write_lock:
+                    try:
+                        rep.rows += await asyncio.to_thread(write_emission_day, con, res, run_id=run_id)
+                    except sqlite3.DatabaseError as exc:
+                        logger.error("emission day write aborted", data={"day": d, "error": str(exc)})
+                        res.status, res.error = "failed", f"write: {exc}"
+                    if res.status == "done":
+                        rep.done += 1
+                        state["consec_failed"] = 0
+                    elif res.status == "skipped":
+                        rep.skipped += 1
+                    else:
+                        rep.failed += 1
+                        if not (res.error or "").startswith(NOT_ENDPOINT_ERRORS):
+                            state["consec_failed"] += 1
+                        logger.warning("emission day failed", data={"day": to_iso(d), "error": (res.error or "")[:200]})
+                        if state["consec_failed"] >= 3 and len(rpc.endpoints) > 1:
+                            state["consec_failed"] = 0
+                            await rpc.fail_over(res.error or "3 failed days", from_label=res.endpoint)
+                    if time.monotonic() - state["last_log"] > 30:
+                        state["last_log"] = time.monotonic()
+                        logger.info("backfill_rpc progress", data={
+                            "era": "emission_daily", "done": rep.done, "failed": rep.failed, "skipped": rep.skipped,
+                            "left": queue.qsize(), "rows": rep.rows, "endpoint": rpc.endpoint.label})
+
+        try:
+            await asyncio.gather(*(worker() for _ in range(conc)))
+        finally:
+            if gateway is None:
+                await rpc.close()
+        rep.stopped = state["stop"]
+        if state["stop"] == "signal":
+            rep.exit_code = common.EXIT_INTERRUPTED
         logger.info("backfill_rpc era finished", data={**rep.__dict__, "stats": rpc.stats()})
         return rep
     finally:

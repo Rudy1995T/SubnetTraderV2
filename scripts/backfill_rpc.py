@@ -5,6 +5,8 @@
         [--from-block N --to-block N] [--endpoint URL] [--price-method auto|swap_sqrt|reserve_ratio]
         [--force-unprobed] [--limit N] [--no-post] [--db PATH]
     python -m scripts.backfill_rpc --post-only     # occupancy reconstruct + stamp + bars over all RPC history
+    python -m scripts.backfill_rpc --emission-daily [--from-block N --to-block N] [--limit N]
+                                                   # one DynamicInfo cross-section per UTC day → rpc_subnet_daily
 
 Standalone process with its own ``ProviderLimiter`` (the service does not use the archive RPC by default).
 Exit codes: 0 ok, 2 precondition, 3 disabled/dependency, 4 decode stop, 5 probe missing/failed, 130 interrupted.
@@ -100,6 +102,8 @@ async def _run(a: argparse.Namespace) -> int:
                               "price_method_match": res["price_method_match"], "asi_version": res["asi_version"],
                               "bittensor_wallet_installed": res["bittensor_wallet_installed"]}))
             return 0 if res["pass"] else common.EXIT_VERIFY
+        if a.emission_daily:
+            return await _emission_daily(a, db_path)
         if a.post_only:
             con = common.open_db(db_path)
             with common.step_run(con, "backfill_rpc:post") as run:
@@ -167,10 +171,41 @@ async def _run(a: argparse.Namespace) -> int:
         lock.__exit__(None, None, None)
 
 
+async def _emission_daily(a: argparse.Namespace, db_path: Path | None) -> int:
+    """Spec 20 N2 item 3: daily emission share for every occupant alive that day (dead ones included)."""
+    from app.backfill import common, rpc_backfill
+    job = "backfill_rpc:emission_daily"
+    con = common.open_db(db_path)
+    try:
+        with common.step_run(con, job) as run:
+            rep = await rpc_backfill.run_emission_daily(
+                force_unprobed=a.force_unprobed, endpoint_override=a.endpoint, from_block=a.from_block,
+                to_block=a.to_block, limit=a.limit, db_path=db_path, run_id=run.run_id)
+            run.rows = rep.rows
+            run.meta = {"era": rep.__dict__}
+            run.note = (f"planned={rep.planned} done={rep.done} failed={rep.failed} skipped={rep.skipped} "
+                        f"rows={rep.rows}" + (f" stopped={rep.stopped}" if rep.stopped else ""))
+    except common.PreconditionError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return exc.code
+    finally:
+        con.close()
+    print(json.dumps({"era": rep.__dict__}, indent=1, default=str))
+    if not (rep.failed or rep.stopped):
+        ev = await common.prepare_db(db_path)
+        try:
+            await common.emit_step_event(ev, "backfill_done", job=job, era="emission_daily", run_id=run.run_id,
+                                         rows=rep.rows, seconds=rep.seconds, warnings=[])
+        finally:
+            await ev.close()
+    return rep.exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m scripts.backfill_rpc", description=__doc__.split("\n")[0])
     p.add_argument("--probe", action="store_true")
     p.add_argument("--post-only", action="store_true")
+    p.add_argument("--emission-daily", action="store_true", help="daily emission share → rpc_subnet_daily")
     p.add_argument("--era", action="append", choices=["gap", "ledger", "pre_ledger"])
     p.add_argument("--step", type=int, choices=[900, 1800, 3600, 14400, 86400])
     p.add_argument("--from-block", type=int)
@@ -185,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     if a.mode:
         app_config.settings.BACKFILL_RPC_MODE = a.mode
-    if not (a.probe or a.era or a.post_only):
+    if not (a.probe or a.era or a.post_only or a.emission_daily):
         a.era = None
     return asyncio.run(_run(a))
 
