@@ -31,10 +31,12 @@ def wf(n_oos, mean=0.03, t=2.5, decay=0.6):
                              pooled_oos={"mean_ic": mean, "t_stat": t}, decay_ratio={"mean_ic": decay})
 
 
-def sv(n_events=12, ratio=2.5):
+def sv(n_events=12, ratio=2.5, union_events=None, union_ratio=None):
+    ue = n_events if union_events is None else union_events
     return SurvivalResult(scope="", factor="quality", horizon_days=90, step_days=90, min_depth=0, n_names=50,
-                          n_obs=100, n_events=n_events, n_event_dates=5, n_events_by_kind={"dereg": n_events},
-                          n_censored=0, death_ratio_low_over_high=ratio)
+                          n_obs=100, n_events=ue, n_event_dates=5, n_events_by_kind={"dereg": n_events},
+                          n_censored=0, death_ratio_low_over_high=ratio if union_ratio is None else union_ratio,
+                          n_events_dereg_only=n_events, death_ratio_dereg_only=ratio)
 
 
 def ds(dsr=0.97):
@@ -111,6 +113,13 @@ def test_c6():
     assert c6["pass"] is True and c6["survivorship"]["ratio"] is None and c6["survivorship"]["ratio_inf"] is True
     assert gate(surv=inputs("survivorship", surv=sv(n_events=9)))["criteria"]["c6_survival"]["reason"] == \
         "survivorship:n_events<10"
+    # 13 §11 item 13 (2026-10-23): judged on dereg-only deaths; the union is a diagnostic only
+    v = gate(surv=inputs("survivorship", surv=sv(n_events=43, ratio=4.5, union_events=171, union_ratio=0.74)))
+    c6 = v["criteria"]["c6_survival"]
+    assert c6["label"] == "dereg_only" and c6["survivorship"]["ratio"] == 4.5 and c6["survivorship"]["n_events"] == 43
+    assert c6["survivorship"]["union"]["ratio"] == 0.74 and c6["survivorship"]["union"]["n_events"] == 171
+    v = gate(surv=inputs("survivorship", surv=sv(n_events=8, ratio=9.0, union_events=171, union_ratio=3.0)))
+    assert v["criteria"]["c6_survival"]["reason"] == "survivorship:n_events<10"      # union events never count
     for f in ("velocity", "P6"):
         assert gate(factor=f)["criteria"]["c6_survival"] == {**gate(factor=f)["criteria"]["c6_survival"],
                                                             "pass": None, "reason": "not_health"}

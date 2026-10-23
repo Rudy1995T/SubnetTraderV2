@@ -343,7 +343,7 @@ Flags clear automatically when the trigger clears for 7 consecutive days (hyster
 3. Monotone-ish decile curve, holds net-of-cost at `trade_tao = 2` with the ported AMM economics;
 4. DSR > 0.95 (necessary, not sufficient; log every variant tried as N);
 5. Walk-forward with ≥ 4 OOS folds: pooled OOS IC > 0, |t| ≥ 2, decay ratio ≥ 0.25;
-6. Survival route (alternative to 1-5 for Health): bottom-tercile 90-d death/zero-emission rate ≥ 2× top tercile with n ≥ 10 events, both scopes;
+6. Survival route (alternative to 1-5 for Health): bottom-tercile 90-d deregistration rate ≥ 2× top tercile with n ≥ 10 events, both scopes (*amended 2026-10-23, operator decision, 13 §11 item 13: zero-emission spells no longer count as deaths for this criterion — in the gate era most are owner burns or the zeroing of healthy subnets; 13 reports the union as a diagnostic*);
 7. ≥ 30 days of `observe`-mode telemetry in the bot with live signal coverage > 60 %.
 Failing the gate leaves the feed in `observe` forever at zero cost — that is a valid outcome.
 

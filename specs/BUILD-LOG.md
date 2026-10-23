@@ -1444,3 +1444,12 @@ which the ratio is < 1. Caveats: P2 uses today's org membership (`github_org_mem
 forward-only so historical Health is the P1+P2(+P4) renormalisation; the P1 dereg ratio is partly mechanical
 (`dereg_safety` is a P1 input). Nothing was changed to pass; a dereg-only c6 is an operator decision (13 §11 item 13)
 and would be a new pre-registered trial.
+
+## 2026-10-23 — operator decision: c6 judges survival on deregistration only (13 §11 item 13)
+
+Master §10 criterion 6 and 13 §2.4/§8.5/§11 item 13 amended; `app/quant/gate.py` `C6_LABEL = "dereg_only"`: c6 now reads
+the survival study's `n_events_dereg_only` / `death_ratio_dereg_only` (kinds dereg, price_reset, reoccupied) and reports
+the old union under `c6_survival.<scope>.union`. `tests/quant/test_gate.py::test_c6` covers both. The decision followed the
+first verdict's in-sample numbers (dereg-only ratios 2.9–13.7), so they are not evidence for it: a c6 pass counts only on
+survival cross-sections dated after 2026-10-23 (first qualifying verdict ≈ 2027-01-21). The 2026-10-23 verdict files stay
+as written (NO-GO under the rule then in force).

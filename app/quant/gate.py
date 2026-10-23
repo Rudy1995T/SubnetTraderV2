@@ -17,6 +17,9 @@ TELEMETRY_SCHEMA = "sentinel-telemetry-1"
 SCOPES = ("live", "survivorship")
 
 
+C6_LABEL = "dereg_only"          # 13 §11 item 13, operator decision 2026-10-23 (was the union)
+
+
 @dataclass
 class GateConfig:
     horizon_days: int = 7
@@ -171,31 +174,36 @@ def evaluate_gate(*, factor: str, label: LabelSpec, live: ScopeInputs, surv: Sco
 
     # c6 — survival route (Health-type factors only)
     if factor not in HEALTH_FACTORS:
-        crit["c6_survival"] = {"pass": None, "rule": "bottom/top tercile death rate >= 2 with n_events >= 10, both "
-                               "scopes", "reason": "not_health", "horizon_days": cfg.survival_horizon_days,
-                               "live": {}, "survivorship": {}}
+        crit["c6_survival"] = {"pass": None, "rule": "bottom/top tercile deregistration rate >= 2 with n_events >= "
+                               "10, both scopes", "reason": "not_health", "label": C6_LABEL,
+                               "horizon_days": cfg.survival_horizon_days, "live": {}, "survivorship": {}}
     else:
+        # §11 item 13 (operator decision 2026-10-23): c6 counts deregistration-type deaths only (dereg, price_reset,
+        # reoccupied); the union with zero-emission spells (master §10's wording) is reported as a diagnostic
         per6 = {}
         for s, si in scopes.items():
             sr = si.surv
             if sr is None:
                 per6[s] = (False, "missing_survival", {})
                 continue
-            ratio = sr.death_ratio_low_over_high
+            ratio = sr.death_ratio_dereg_only
             inf = isinstance(ratio, float) and math.isinf(ratio) and ratio > 0
-            d = {"n_events": sr.n_events, "n_event_dates": sr.n_event_dates, "ratio": _fin(ratio), "ratio_inf": inf,
-                 "n_events_by_kind": sr.n_events_by_kind, "n_events_dereg_only": sr.n_events_dereg_only,
-                 "ratio_dereg_only": _fin(sr.death_ratio_dereg_only)}
-            if sr.n_events < cfg.survival_min_events:
+            union = sr.death_ratio_low_over_high
+            d = {"n_events": sr.n_events_dereg_only, "ratio": _fin(ratio), "ratio_inf": inf,
+                 "union": {"n_events": sr.n_events, "n_event_dates": sr.n_event_dates, "ratio": _fin(union),
+                           "ratio_inf": isinstance(union, float) and math.isinf(union) and union > 0,
+                           "n_events_by_kind": sr.n_events_by_kind}}
+            if sr.n_events_dereg_only < cfg.survival_min_events:
                 per6[s] = (False, f"n_events<{cfg.survival_min_events}", d)
             elif not inf and (d["ratio"] is None or d["ratio"] < cfg.survival_ratio_min):
                 per6[s] = (False, "ratio_below_threshold", d)
             else:
                 per6[s] = (True, None, d)
         ok6, reason6 = _both(per6)
-        crit["c6_survival"] = {"pass": ok6, "rule": f"n_events>={cfg.survival_min_events} and bottom/top tercile "
-                               f"ratio>={cfg.survival_ratio_min} (+inf counts), both scopes", "reason": reason6,
-                               "horizon_days": cfg.survival_horizon_days, **{s: v[2] for s, v in per6.items()}}
+        crit["c6_survival"] = {"pass": ok6, "rule": f"dereg-only n_events>={cfg.survival_min_events} and bottom/top "
+                               f"tercile ratio>={cfg.survival_ratio_min} (+inf counts), both scopes", "reason": reason6,
+                               "label": C6_LABEL, "horizon_days": cfg.survival_horizon_days,
+                               **{s: v[2] for s, v in per6.items()}}
 
     # c7 — observe-mode telemetry (15 §2.7 export)
     c7 = {"pass": None, "rule": f"days>={cfg.observe_min_days} and entry_coverage>{cfg.observe_min_coverage} and "
