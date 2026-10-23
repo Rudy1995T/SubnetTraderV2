@@ -1398,3 +1398,49 @@ the write as a shared-resource change, so it waits for the operator):
    1–2 nights).
 3. After S9 reports done: `python -m scripts.replay_history --owners github`, then `--owners scoring` (N2 item 4), then
    N2 item 5 (`python -m app.quant snapshot` → `report --run-all` → `gate`).
+
+## 2026-10-23 — spec 20 N2 runs and the first gate verdict (NO-GO)
+
+**Runs (live DB):**
+- S10 chain + integrity (operator, 2026-10-22 13:13–≈15:30Z): 614 slots 2025-02-14 → 2026-10-20; 1,264,802 chain and
+  153,656 integrity rows (`backfilled = 1`); 54 of 56 dead occupants with replayed `emission_share`; P1 ok-share:
+  emission/gate/liquidity 90 %, dereg 95 %, net_flow_30d 45 % (TMC buy/sell from 2025-09-24); `control_stability_90d`
+  100 % ok, `owner_commitment` 1 %. 0 events.
+- S9 `backfill_github` (operator restarted the service 13:13Z; launcher waited for the window): one window, finished
+  2026-10-23 05:09Z — 627 repos, 626 done + 1 gone, 8 truncated at the 50-page cap, 2,551 requests (estimate was
+  15–25 k: most repos are small), 21,343 rows, 324,677 `github_authors_daily` rows.
+- S10 github (09:23–09:45Z): 615 slots 2025-02-13 → 2026-10-20, 740,732 rows; `active_authors_28d` ok on 69 % of
+  occupant-slots (the rest: no GitHub link ever observed incl. dead occupants, 5 % `backfill_incomplete`).
+- Scoring backfill (`--owners scoring`, 10:21–12:28Z): 392 official slots 2025-09-22 → 2026-10-20, 50,204 rows, **2 h 07 m**
+  (12 §2.15's 20-min estimate was ×6 off); 128 scored per slot, insufficient_data 48 → 4 per slot over the year;
+  historical pillar coverage P1 0.8 / P2 0.9 / P4 0.25, P3/P5/P6 0 (forward-only, 13 §2.5). 55 of 56 dead occupants scored.
+- Backup `manual/taosentinel-20261023T124917Z-post-n2.db` (25 min) → snapshot `quant_taosentinel-20261023T124917Z-post-n2.db`
+  (1.6 GB, 398 backfilled score slots). The nightly 03:30Z backup predated the GitHub replay and the scoring run, so the
+  first snapshot taken from it was deleted unused.
+
+**Coverage fixes found on the way (17 §2.9 builder, 13 table):** `emission_share` admissible from 2025-02-14 (13's view;
+the builder read `chain_daily` and its view check matched tables only); `github_p2` admissible from
+`BACKFILL_GITHUB_SINCE` + 90 d = 2025-05-14 (was the oldest commit seen, 2024-04-15: windows before that are
+incomplete; the replay's coverage hook now also refuses windows that start before SINCE — the P2 rows it already wrote
+for 2025-02-13 → 05-13 stay in `metric_values` but are inadmissible to 13 and unused by the scoring backfill);
+`control_stability_90d` reconstructible (11 §11 item 12) and out of `forward_only`; `chain_buys` forward-only in 13 too
+(13 §11 item 14).
+
+**Verdict** (`python -m app.quant gate --pit-mode reconstructed --db <snapshot>`, pre-registered factors only; 13's
+rule — log every trial, tune nothing): `quality_cg` and `P1` both **gate_pass = false**, c1–c6 fail on both scopes,
+c7 pending (no observe telemetry). Files `data/quant/results/gate_verdict_{quality_cg_20261023_131712,P1_20261023_131758}.json`.
+
+| factor / scope | 7 d IC gross (t) | IC with size + emission controls (t) | walk-forward OOS IC (t) | c6 union ratio (events) | dereg-only ratio (events) |
+|---|---|---|---|---|---|
+| quality_cg survivorship | −0.030 (−1.91) | −0.033 (−2.30) | +0.003 (+0.10) | 0.74 (171) | 4.5 (43) |
+| quality_cg live | −0.002 (−0.09) | −0.036 (−1.32) | +0.047 (+1.21) | 0.66 (96) | 2.9 (24) |
+| P1 survivorship | −0.049 (−2.39) | −0.059 (−3.54) | −0.014 (−0.37) | 0.59 (161) | 13.7 (40) |
+| P1 live | −0.044 (−1.41) | — | +0.055 (+0.92) | 0.40 (96) | 4.6 (24) |
+
+Reading: the scores do **not** predict 7-day returns (the in-sample sign is negative and does not survive walk-forward);
+they **do** separate deregistration risk (low tercile deregisters 3–14× as often), but the pre-registered c6 label is the
+union with zero-emission spells (≈ 80 % of events, many of them owner burns / gate-era zeroing of healthy subnets), on
+which the ratio is < 1. Caveats: P2 uses today's org membership (`github_org_membership_asof_today`); P3/P5/P6 are
+forward-only so historical Health is the P1+P2(+P4) renormalisation; the P1 dereg ratio is partly mechanical
+(`dereg_safety` is a P1 input). Nothing was changed to pass; a dereg-only c6 is an operator decision (13 §11 item 13)
+and would be a new pre-registered trial.

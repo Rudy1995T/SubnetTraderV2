@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ HOLE_SHARE = 0.5
 # 17 §3.4: keys whose history this phase provides (the owners' replays turn it into metric_values).
 RECONSTRUCTIBLE_KEYS = frozenset({
     "emission_share", "net_flow_30d", "liquidity_depth", "dereg_safety", "gate_margin", "miner_burn_ok", "tenure",
-    "owner_commitment", "active_authors_28d", "fte_devs_84d", "commit_days_90d", "bus_factor",
+    "owner_commitment", "control_stability_90d", "active_authors_28d", "fte_devs_84d", "commit_days_90d", "bus_factor",
     "release_cadence_90d", "review_practice_90d", "declared_repo_freshness", "org_freshness"})
 ERA_BLOCKS = {"pre_ledger": (4920351, 6502593), "ledger": (6502594, 8443757)}
 CHAIN_HOURLY_SOURCES = ("sse", "rest_table", "tick_rollup", "analytics_1w", "analytics_1m")
@@ -179,7 +180,10 @@ def _bars_series(con: sqlite3.Connection, period: str, intervals: dict, now: int
 
 def _reconstructible_from(con: sqlite3.Connection) -> dict:
     daily = _table_exists(con, "chain_daily")
-    em = _one(con, "SELECT MIN(day_ts) FROM chain_daily WHERE emission_percent IS NOT NULL") if daily else None
+    # 13's view (chain_daily ∪ 17's daily RPC share, migration 0005) starts at the first full dTAO day
+    em = (_one(con, "SELECT MIN(day) FROM v_quant_chain_daily WHERE emission_share IS NOT NULL")
+          if _one(con, "SELECT 1 FROM sqlite_schema WHERE type = 'view' AND name = 'v_quant_chain_daily'") else
+          _one(con, "SELECT MIN(day_ts) FROM chain_daily WHERE emission_percent IS NOT NULL") if daily else None)
     nf = None
     if daily:
         r = con.execute("SELECT day_ts FROM (SELECT day_ts, COUNT(*) OVER (PARTITION BY netuid ORDER BY day_ts "
@@ -189,11 +193,19 @@ def _reconstructible_from(con: sqlite3.Connection) -> dict:
     oc = _one(con, "SELECT MIN(day_ts) FROM chain_daily WHERE owner_personal_locked_alpha > 0") if daily else None
     gh = _one(con, "SELECT MIN(event_at) FROM github_commits") if _table_exists(con, "github_commits") else None
     s = common.settings()
+    if gh is not None and _one(con, "SELECT 1 FROM github_commits WHERE backfilled = 1 LIMIT 1"):
+        # 17 S9 fetched commits since BACKFILL_GITHUB_SINCE only: P2's 90-day windows are complete 90 d later
+        since = int(datetime.strptime(s.BACKFILL_GITHUB_SINCE, "%Y-%m-%d").replace(tzinfo=UTC).timestamp())
+        gh = max(int(gh), since + 90 * 86400)
     rg = _one(con, "SELECT MIN(day_ts) FROM regime_daily WHERE label <> 'UNKNOWN' AND spec_version = ?",
               (s.SPEC_VERSION,))
     return {"price_depth_moving_price": _one(con, "SELECT MIN(timestamp) FROM pool_history WHERE moving_price IS NOT "
                                                   "NULL AND tao_in_pool IS NOT NULL"),
-            "emission_share": em, "net_flow_30d": nf, "owner_commitment": oc, "control_stability_90d": None,
+            "emission_share": em, "net_flow_30d": nf, "owner_commitment": oc,
+            # 11 §11 item 12: reconstructed mode reads 11's owner_rpc_seed changes by event_at (confirmed by the
+            # 2026-10-22 replay); history starts with 17's first rpc_owner_history row
+            "control_stability_90d": _one(con, "SELECT MIN(event_at) FROM rpc_owner_history")
+            if _table_exists(con, "rpc_owner_history") else None,
             "tenure": _one(con, "SELECT MIN(registered_ts) FROM occupants"), "github_p2": gh, "regime": rg}
 
 

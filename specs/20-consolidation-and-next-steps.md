@@ -137,6 +137,8 @@ Order rationale: safety before evidence before spend; nothing paid is proposed b
 5. **First verdict:** `python -m app.quant snapshot` → `report --run-all` → `gate` for `quality_cg` and `P1` on both scopes; run c6 with the union (default) and the `death_ratio_dereg_only` diagnostic side by side; log everything in `trials.json`. Then `QUANT_WEEKLY_JOB_ENABLED=true` with `MemoryMax=3G` in the unit (16 §11 item 16) or keep the CLI.
 6. Update 13 §2.5's backtestability matrix and `coverage.json`; BUILD-LOG entry with the verdict and its caveats (P2 history uses today's org membership — report with and without pre-`first_seen_at` rows, 06 §11 item 6; P3/P5/P6 forward-only; historical Health is the P1+P2 renormalisation).
 
+*Status 2026-10-23 (BUILD-LOG):* items 1–6 done; first verdict NO-GO for `quality_cg` and `P1` (c1–c6 fail, c7 pending). Verify: 392 official backfilled slots ✓; no `insufficient_data` ✓; c1–c6 booleans + `pending: [c7]` ✓; `forward_only` drops `control_stability_90d` ✓ and keeps `chain_buys` (item 14 resolved as forward-only on both sides) ✓.
+
 **Verify:** `scores` holds ≥ 365 official `backfilled = 1` slots for `ts-1.0`; `report --run-all` returns no `insufficient_data` for `quality_cg` on the survivorship scope; `gate_verdict_quality_cg_*.json` has `pass` booleans (not null) for c1–c6 and `pending: [c7]`; `coverage.json.forward_only` no longer lists `control_stability_90d` or `chain_buys` (13 §11 item 14 resolved one way or the other).
 
 ### N3 — Operator surface: alerts that read well, a daily brief, scores where the operator looks (effort 2)
@@ -279,3 +281,4 @@ N0–N4 are complete and recorded in BUILD-LOG, N2 has produced one gate verdict
 - **2026-10-18** — written from the post-Phase-12 audit (live DB, `/health`, logs, both test suites, every spec's §11). First scores, metric coverage, inert-key scan and disk inventory recorded as of 20:30Z.
 - 2026-10-22: N2 item 3 built and run (BUILD-LOG 2026-10-22); schema v5.
 - 2026-10-22: N2 item 2 (S10) built; live run pending operator go-ahead (writes ≈ 1.3 M append-only rows).
+- 2026-10-23: N2 done — first gate verdict NO-GO (BUILD-LOG 2026-10-23).

@@ -69,12 +69,15 @@ async def occupants_alive(db, d: int) -> list[dict]:
         "ORDER BY netuid", (d, d), writer=True)
 
 
-def github_coverage(path: Path) -> Callable[[int, int], bool]:
+def github_coverage(path: Path, floor: int = 0) -> Callable[[int, int], bool]:
     """17 §2.8 sidecar (flat ``{repo_id: unit, "_meta": …}``) → ``coverage(repo_id, since)``: commits done and not
-    truncated after ``since``; a repo gone on GitHub (404 on both path forms) has nothing left to fetch → covered."""
+    truncated after ``since``; a repo gone on GitHub (404 on both path forms) has nothing left to fetch → covered.
+    A window starting before ``floor`` (``BACKFILL_GITHUB_SINCE``: nothing older was fetched) is never covered."""
     units = json.loads(path.read_text()) if path.exists() else {}
 
     def cov(repo_id: int, since: int) -> bool:
+        if since < floor:
+            return False
         u = units.get(str(repo_id))
         if not u or u.get("commits") not in ("done", "gone"):
             return False
@@ -139,7 +142,7 @@ async def run_owner(db, owner: str, *, d0: int, d1: int, redo: bool, limit: int 
         side = s.path(s.DATA_DIR) / "backfill" / "github_progress.json"
         if not side.exists():
             raise common.PreconditionError(f"{side} missing: run 17 S9 (scripts.backfill_github) first")
-        kw = {"calc": P2Metrics(db), "cov": github_coverage(side)}
+        kw = {"calc": P2Metrics(db), "cov": github_coverage(side, day_ts(s.BACKFILL_GITHUB_SINCE))}
     fn = {"chain": replay_chain, "github": replay_github, "integrity": replay_integrity}[owner]
     last = None if redo else await watermark(db, owner)
     d = max(d0, last + DAY) if last is not None else d0

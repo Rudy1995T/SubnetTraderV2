@@ -46,6 +46,7 @@ def test_github_coverage_hook(tmp_path):
     cov = rh.github_coverage(p)
     assert cov(1, D0) and not cov(2, D0) and cov(3, D0) and not cov(4, D0) and not cov(5, D0) and cov(6, D0)
     assert not rh.github_coverage(tmp_path / "missing.json")(1, D0)
+    assert not rh.github_coverage(p, floor=D0 + 1)(1, D0)                 # window older than the fetched history
 
 
 def test_owner_resumes_from_watermark(bf, monkeypatch):

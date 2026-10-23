@@ -47,7 +47,9 @@ def test_forward_only_override(tmp_path):
     c = bt.load_coverage(_cov(tmp_path), [])
     w: list[str] = []
     assert bt.is_reconstructible("emission_share", c, w)
-    assert not bt.is_reconstructible("chain_buys", c, w) and w == ["coverage_forward_only:chain_buys"]
+    # chain_buys: forward-only in both 13 and 17 since 2026-10-22 (13 §11 item 14) → no disagreement warning
+    assert not bt.is_reconstructible("chain_buys", c, w) and w == []
+    assert bt.is_reconstructible("control_stability_90d", c, w) and w == []     # 11 §11 item 12 confirmed
     assert not bt.is_reconstructible("x_engagement_30d", None)
     assert not bt.is_reconstructible("site_uptime_30d", None)
 

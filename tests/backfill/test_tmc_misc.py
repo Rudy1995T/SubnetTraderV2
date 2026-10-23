@@ -177,7 +177,7 @@ def test_coverage_schema(bf):
         assert all(k in node for k in keys), (path, [k for k in keys if k not in node])
     assert doc["schema"] == "coverage-1" and isinstance(doc["generated_at"], int)
     assert doc["eras"]["gap"]["status"] == "not_run" and doc["reconstructible_from"]["control_stability_90d"] is None
-    assert "site_age" in doc["forward_only"] and "control_stability_90d" in doc["forward_only"]
+    assert "site_age" in doc["forward_only"] and "control_stability_90d" not in doc["forward_only"]   # 11 §11 item 12
     assert not set(doc["forward_only"]) & {k for k, v in doc["reconstructible_from"].items() if v is not None}
     holes = [h for h in doc["holes"] if h["from_ts"] == t0 + 10 * 3600]
     assert holes and holes[0]["to_ts"] == t0 + 22 * 3600

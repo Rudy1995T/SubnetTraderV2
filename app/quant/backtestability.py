@@ -33,7 +33,7 @@ RECONSTRUCTIBLE_KEYS: dict[str, dict] = {
     "dereg_safety": _k("reconstructible", "price_depth_moving_price", ("immunity_period_assumed_constant",)),
     "liquidity_depth": _k("reconstructible", "price_depth_moving_price"),
     "net_flow_30d": _k("reconstructible", "net_flow_30d"),
-    "chain_buys": _k("reconstructible", "net_flow_30d"),
+    # chain_buys: forward-only — 05's historical tier writes it failed/snapshot_historical (13 §11 item 14, 2026-10-22)
     "miner_burn_ok": _k("partial", "price_depth_moving_price", min_as_of=_PRICE_BURN),
     # P2 (06 replay over 17 backfill_github)
     **{k: _k("reconstructible", "github_p2", (GITHUB_CAVEAT,)) for k in _P2_RECON},
@@ -41,6 +41,7 @@ RECONSTRUCTIBLE_KEYS: dict[str, dict] = {
     "org_freshness": _k("approx", "github_p2", (GITHUB_CAVEAT,)),
     # P4
     "tenure": _k("reconstructible", "tenure"),
+    "control_stability_90d": _k("partial", "control_stability_90d", ("control_stability_no_identity_churn_pairing",)),
     # weight-0 raw keys read through `evidence:` (05's chain replay)
     "owner_locked_share": _k("reconstructible", "owner_commitment"),
     "implied_miner_burn": _k("partial", "price_depth_moving_price", min_as_of=_PRICE_BURN),
