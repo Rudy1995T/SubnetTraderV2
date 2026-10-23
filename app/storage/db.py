@@ -373,6 +373,30 @@ class Database:
         await self.execute("PRAGMA optimize")
 
 
+class ReadOnlyDatabase(Database):
+    """A ``Database`` with only the ``mode=ro`` + ``query_only`` reader: CLI views of the live DB (01 §2.14 ``status``,
+    14 §2.8's brief dry-run). Every read — ``writer=True`` included — goes to that connection; writes fail in SQLite."""
+
+    @property
+    def connected(self) -> bool:
+        return self._r is not None
+
+    async def connect(self) -> None:
+        if not self.path.exists():
+            raise FileNotFoundError(self.path)
+        r = await aiosqlite.connect(f"file:{self.path}?mode=ro", uri=True, isolation_level=None)
+        r.row_factory = _row_to_dict
+        await _apply_pragmas(r, reader=True)
+        self._r = r
+        self.reader_enabled = True
+        self._schema_version = int(await self.fetchval("SELECT MAX(version) FROM schema_version") or 0)
+
+    def _read_conn(self, writer: bool) -> aiosqlite.Connection:
+        if self._r is None:
+            raise RuntimeError("Database is not connected")
+        return self._r
+
+
 def _quick_check(path: Path) -> str:
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:

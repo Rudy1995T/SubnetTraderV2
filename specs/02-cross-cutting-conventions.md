@@ -207,7 +207,7 @@ Dedupe keys follow 03's patterns.
 - `startup_catchup: bool` on `JobSpec` (amended 2026-09-23): when true, the runtime runs the job once at boot if its last scheduled fire was missed while the process was down (keyed on the missed fire time, not a fixed age threshold). *(Amended 2026-10-16.)* Users: 04 `registry_identity`, 05 `tmc_daily`/`chain_features`, 06 `github_org_enum`/`github_activity`/`github_metrics`, 11 `owner_collect_daily`/`integrity_features`, 12 `scoring_6h`. Two optional `JobSpec` window fields restrict the catch-up run without changing the schedule:
   - `catchup_avoid_utc` (windows to wait out, e.g. `tmc_daily` avoids 11's TMC window `20:25-23:35`);
   - `catchup_only_utc` (the only window it may run in, e.g. `owner_collect_daily` `20:30-23:15`).
-- `ops_exempt=True` marks ops jobs that `KILL_SWITCH`/`PAUSE_ALL` do not pause: 16's ops jobs, 01's `log_retention_daily`, 03's `storage_retention_daily`, and 14's `alert_dispatch` and `telegram_bot` (otherwise `PAUSE_ALL` would silence alerts and `/resume`).
+- `ops_exempt=True` marks ops jobs that `KILL_SWITCH`/`PAUSE_ALL` do not pause: 16's ops jobs, 01's `log_retention_daily`, 03's `storage_retention_daily`, and 14's `alert_dispatch` and `telegram_bot` (otherwise `PAUSE_ALL` would silence alerts and `/resume`), plus 14's `market_brief_daily` (amended 2026-10-23: one informational message a day that `PAUSE_ALL` should not silence; it never pages).
 
 **E2 — Job ids.** The owner spec's ids win, and 01's `JOB_TABLE` lists every job and LongTask exactly as the owners define them. The placeholder rows are replaced:
 
@@ -227,12 +227,12 @@ It also adds:
 - 11: `owner_collect_daily`, `owner_watch_hourly`, `team_seed_daily`, `integrity_features`, `owner_rpc_seed`.
 - 12: `features_hourly`, `scoring_6h`.
 - 13: `quant_weekly`.
-- 14: `alert_dispatch`, `needs_review_digest`, `dereg_watch`, `telegram_bot`.
+- 14: `alert_dispatch`, `needs_review_digest`, `dereg_watch`, `telegram_bot`, `market_brief_daily` (added 2026-10-23, 14 §2.8).
 - 16: `backup_daily`, `ops_guard_5m`, `ops_digest_daily`, `cost_ledger_hourly`.
 - 03: `storage_retention_daily`.
 - 17: manual `backfill_tmc`, `backfill_github`. The other 17 scripts run outside the service.
 
-*(Amended 2026-10-16.)* That is the whole table: 57 = 54 jobs + 3 LongTasks (`chain_sse`, `discord_gateway`, `telegram_bot`), including §K6's four workbench jobs (built 2026-10-16). The placeholder ids above and `chain_prune` are kept in `app/jobs.py:RETIRED_JOB_IDS` and must never be declared. 01's verify strings (declared/available job counts per phase) are recomputed from the final table.
+*(Amended 2026-10-16.)* That is the whole table: 58 = 55 jobs + 3 LongTasks (57 until 14's `market_brief_daily` was added 2026-10-23) (`chain_sse`, `discord_gateway`, `telegram_bot`), including §K6's four workbench jobs (built 2026-10-16). The placeholder ids above and `chain_prune` are kept in `app/jobs.py:RETIRED_JOB_IDS` and must never be declared. 01's verify strings (declared/available job counts per phase) are recomputed from the final table.
 
 **E3 — Fixed UTC times.**
 
@@ -487,3 +487,4 @@ All four are declared with `phase = 3` (the phase whose data they read) and owne
   - J: J1 adds the `price_bars` same-source recompute.
   - `tests/test_conventions.py` checks the machine-checkable rules.
 - 2026-10-16 (later) — Spec 19 built (W2–W6, BUILD-LOG "Spec 19 workbench" entry). §K amended to the built design: K2 network weather in its own `wb_dereg_network_hourly` table; K3 `repo_pushed_days` uses `github`; K4 final key list (`spot_vs_mp`, `spot_rank`, `dereg_recovery_ratio` deferred); K5 `chain_constant_drift` keeps 05's immediate route; K6 triggers and phase 3. A2 lists the built modules. E2 = 57. C8 = 47 evidence keys.
+- 2026-10-23 — spec 20 N3: E2 + 14's `market_brief_daily` (58 = 55 jobs + 3 LongTasks); E1 lists it as `ops_exempt` (a daily plain message, never a page).

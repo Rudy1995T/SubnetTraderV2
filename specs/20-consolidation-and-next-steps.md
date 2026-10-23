@@ -150,6 +150,8 @@ Order rationale: safety before evidence before spend; nothing paid is proposed b
 
 **Verify:** a brief arrives daily; the terminal shows the same composite as `/api/v1/scores/latest` for a sampled subnet; `python -m app status` runs in < 3 s.
 
+*Status 2026-10-23 (BUILD-LOG "spec 20 N3"):* items 2–4 built and verified offline/read-only — brief = 14 §2.8 (its dereg line reads 19's `days_to_cull_static`, not `wb_dereg_network_hourly`, which has no per-subnet column), tab = 15 §2.9.1, status = 01 §2.14; `[sentinel] enabled = true, mode = "observe"` set in the terminal (N1 item 5, F6). Waiting on the operator: `sudo systemctl restart taosentinel`, `systemctl --user restart tao-terminal`, the item-1 Telegram walk, and the first 06:00Z brief.
+
 ### N4 — Free coverage: the empty metrics that cost nothing but time (effort 1; operator 2–3 h once)
 
 | Step | Unlocks | How |
@@ -282,3 +284,4 @@ N0–N4 are complete and recorded in BUILD-LOG, N2 has produced one gate verdict
 - 2026-10-22: N2 item 3 built and run (BUILD-LOG 2026-10-22); schema v5.
 - 2026-10-22: N2 item 2 (S10) built; live run pending operator go-ahead (writes ≈ 1.3 M append-only rows).
 - 2026-10-23: N2 done — first gate verdict NO-GO (BUILD-LOG 2026-10-23).
+- 2026-10-23: N3 items 2–4 built (BUILD-LOG 2026-10-23 N3); item 2's dereg source corrected to 19 §2.4 `days_to_cull_static`; findings: official-slot regime always `UNKNOWN`, SSE idle-hub backlog (fixed in 14), `youtube_poll` failing.

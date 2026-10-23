@@ -31,11 +31,20 @@ class ScoreRow(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     tier: Literal["A", "B", "C", "D", "F"] | None = None
     red_flags: tuple[str, ...] = Field(default=(), max_length=32)
+    pillars: dict[str, float | None] | None = None     # 15 §3.2 (2026-10-23): display only in the consumer
 
     @field_validator("occupant_key")
     @classmethod
     def _occ(cls, v: str) -> str:
         assert _OCC_RE.match(v)
+        return v
+
+    @field_validator("pillars")
+    @classmethod
+    def _pillars(cls, v):
+        # the consumer turns a malformed value into None; the producer must never send one
+        assert v is None or (set(v) <= {"P1", "P2", "P3", "P4", "P5", "P6"}
+                             and all(x is None or 0.0 <= x <= 1.0 for x in v.values()))
         return v
 
     @model_validator(mode="after")

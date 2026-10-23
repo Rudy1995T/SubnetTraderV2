@@ -12,7 +12,7 @@ This spec defines every operator-facing surface of TaoSentinel: the FastAPI appl
 - `create_app()` factory (one factory; 01 ships its Phase-0 subset), CORS allowlist, two-tier auth (open reads, `X-Auth-Token` mutations) plus an origin guard, runtime injection (`configure(get_runtime)` per router, §8.2).
 - The complete route inventory (§3.5), including routes whose semantics other specs own (01 jobs/control, 04 registry, 11 team/owner/review, 12 rescore, 16 budget override): this spec fixes method, path, tier, body, status codes and error mapping.
 - Endpoints defined here: `/api/health/services`, `/api/v1/scores/*`, `/api/v1/subnets*`, `/api/v1/events`, `/api/v1/matrix.csv`, `/api/v1/export/scores.json`, `/api/v1/stream`, `/api/v1/quant/results*`, `/api/v1/manual/*`, `/api/v1/review*`, `/api/v1/control/*`. `/health` is served here but built by 01 (02 §G6).
-- Telegram: transport (ported), command handlers, reply formats, inline keyboards; the **routing table** (§2.4) and alert templates (§8.5) that 01's Phase-0 `alert_dispatch` job applies (02 §D3); `dereg_watch` for `WATCHLIST_NETUIDS`; the weekly needs-review digest, which also delivers every digest-routed event.
+- Telegram: transport (ported), command handlers, reply formats, inline keyboards; the **routing table** (§2.4) and alert templates (§8.5) that 01's Phase-0 `alert_dispatch` job applies (02 §D3); `dereg_watch` for `WATCHLIST_NETUIDS`; the weekly needs-review digest, which also delivers every digest-routed event; the daily market brief (§2.8, added 2026-10-23 by 20 N3).
 - Web UI: three static pages (matrix, subnet, events) under `/ui`, no build step and no Node toolchain (§8.6).
 - Tests and verify checklist.
 
@@ -218,6 +218,30 @@ After Telegram accepts the last chunk the watermark becomes `min(MAX(events.id),
 - **Phone layout (amended 2026-10-20).** The operator reads the bot on a phone, where a `<pre>` block wraps after ≈ 34 monospace characters (measured on the operator's screenshots: 40-character rows wrapped, so every table looked broken). Every `<pre>` line is ≤ 32 characters (`format.PRE_WIDTH`); lists that need no columns (flags, reviews, needs-review buckets, events, insight cards) are plain lines outside `<pre>`, grouped and labelled in words. Screens open with an emoji + bold title and an italic context line (`as_of`, run kind, window).
 - **Navigation (amended 2026-10-20).** `/start` and `/menu` open a home screen; every read screen's keyboard ends with `🏠 Home` (`act:home`), so a tap never strands the operator (the old `⬅️ Menu` button opened `/health`'s 57-row job table). Button taps edit the message in place.
 
+### 2.8 Daily market brief (`market_brief_daily`, added 2026-10-23 — spec 20 N3 item 2)
+
+Cron job `market_brief_daily` (§6.1; `MARKET_BRIEF_AT_UTC`, default `06:00`) sends **one plain message** through `telegram.send_message` — never an `events` row, so `alert_dispatch`, routing and `alerted_at` are not involved and nothing pages. It is `ops_exempt` (02 §E1: an informational send that `PAUSE_ALL` must not silence, like the dispatcher). Without a configured token/chat it renders and returns `rows=0` with the note `telegram not configured` (as the digest does). SQLite reads plus 01's `build_health(rt)`; no provider other than `telegram`.
+
+**Slot.** `S` = `feed_meta(spec=SPEC_VERSION).max_as_of` (the newest non-shadow slot; at 06:00Z that is the 00:00Z official slot, scored at 00:15Z). No row for `S` → a two-line message "no scores for {spec} yet". `P = S − 86400` (the comparison slot; `scores` rows at exactly `P`). Composite = `composite_smoothed` everywhere (the feed's `composite`, §3.5).
+
+**Lines** (≤ 20 lines of HTML source, `<pre>` lines ≤ 32 characters per §2.7; sections with nothing to say keep their line and say so):
+
+| # | line | source and rule |
+|---|---|---|
+| 1 | `🌅 <b>Market brief</b> · 24 Oct` | run date (UTC) |
+| 2 | `<i>slot 24 Oct 00:00Z · official · regime DISPERSED</i>` | `S`, its `run_kind`, `scores.regime` of `S` as stored (an `UNKNOWN` is shown, not replaced) |
+| 3 | `<i>a risk filter, not a buy signal (13 verdict 23 Oct)</i>` | fixed caption: the first gate verdict (BUILD-LOG 2026-10-23) found no link to 7-day returns and 3–14× more deregistrations in the low tiers |
+| 4–9 | `🏆 <b>Top 5</b> by composite` + `<pre>` rows `NNN name·········· T  cc.c .cc!` | `latest_scores(spec, include_insufficient=False)` (confidence ≥ 0.4, active, 02 §H1), first 5; `!` = any red flag |
+| 10–15 | `📈 <b>24-h movers</b> · Δ composite` + `<pre>` rows `NNN name········ T  ±d.d cc.c` | current active occupants with a non-null composite at both `S` and `P`; the 5 largest `|Δ|`, ties by netuid; none at `P` → "no slot 24 h earlier" |
+| 16 | `🔀 <b>Tiers</b> ↓ 34 B→C · 36 D→F … ↑ 104 D→C` | occupants whose non-null `tier` differs between `P` and `S`; downgrades first (by netuid), then upgrades; at most 8 shown, then `+k`; none → `no change` |
+| 17 | `🚩 <b>Flags</b> +2 SN103 owner_extraction, … · −0` | `red_flag_state` (`SPEC_VERSION`, current occupants): raised = `raised_at ∈ (P, S]`, cleared = `cleared_at ∈ (P, S]`; at most 4 names per side, then `+k` |
+| 18 | `⚰️ <b>Dereg watch</b> SN70 3.4 d · next reg ≈ 3.4 d` | 19 §2.4 evidence key `days_to_cull_static` (raw, `source='chain'`, written hourly by `wb_dereg`) at its newest `as_of ≤ now`, status `ok`, value < 7, current active occupants, ascending, at most 4 then `+k`; `eta_next_registration_days` from the newest `wb_dereg_network_hourly` row; that row older than 2 h → `(stale, as of HH:MMZ)`; nothing under 7 d → `none within 7 d` |
+| 19 | `🩺 30/45 metrics · 0 stale jobs · 0 alerts pending` | populated = scored keys (12's registry, 45) whose `stage='norm'` value at `S` is non-null for at least half of the slot's active scored occupants (20 §1.4's reading); stale = `/health` jobs and tasks with `stale: true`; pending = `/health.alerts.pending_immediate` |
+
+*Why `days_to_cull_static` and not `wb_dereg_network_hourly` (20 N3 named the table):* the network table has one row per hour and no per-subnet column; the per-subnet "time to the next cull line" is 19 §2.4's `days_to_cull_static = eta_next_registration_days + (rank₃₀ − 1) · reg_gap_mean` ("if nothing moves"). On 2026-10-23 17:00Z it selected exactly SN70 (3.4 d, rank 1 of k₃₀ = 4); the next subnet was at 10.5 d.
+
+`python -m app.notifications.brief [--db PATH]` renders the brief from a read-only connection (`mode=ro`) and prints it without sending or writing (verify aid, §10).
+
 ---
 
 ## 3. Data contract
@@ -241,6 +265,7 @@ After Telegram accepts the last chunk the watermark becomes `min(MAX(events.id),
 | `web_checks` | `occupant_key, url, kind, is_primary, check_day_ts, status_class, robots_allowed` | `blocked_sites` digest bucket (§8.3) |
 | `chain_ticks` | newest per `netuid`: `netuid, block_number, occupant_key, observed_at, deregistration_risk, subnet_moving_price` | `dereg_watch` only |
 | `job_state` | `('needs_review_digest', 'last_event_id')` | digest watermark (read + write) |
+| `metric_values` (raw), `wb_dereg_network_hourly` | raw `days_to_cull_static` rows; newest network row (`hour_ts, eta_next_registration_days, observed_at`) | market brief dereg line (§2.8; 19 §2.4 owns both) |
 
 ### 3.2 Tables written
 
@@ -650,6 +675,8 @@ All keys live in `app/config.py` `Settings(BaseSettings)` (spec 01 conventions: 
 | `NEEDS_REVIEW_DIGEST_DAY` | str | `"mon"` | APScheduler `day_of_week` |
 | `NEEDS_REVIEW_DIGEST_HOUR_UTC` | int | `8` | 0–23 |
 | `BLOCKED_SITE_DAYS` | int | `7` | digest bucket `blocked_sites` (§8.3) |
+| `MARKET_BRIEF_ENABLED` | bool | `True` | daily brief (§2.8) |
+| `MARKET_BRIEF_AT_UTC` | str | `"06:00"` | `HH:MM` UTC (01's `hhmm` validator) |
 | `FRONTEND_PORT` | int | `3001` | **retired 2026-10-18** (the UI is served at `/ui` on `HEALTH_PORT`); the key stays so existing `.env` files load, nothing reads it |
 
 Consumed, owners in parentheses (not redefined here): `HEALTH_HOST` (01, loopback default), `HEALTH_PORT` (01, 8090), `API_AUTH_TOKEN`, `CONTROL_ALLOWED_ORIGINS` (01; this spec asks its validator to reject `*`), `SPEC_VERSION` (01; `SCORING_SPEC_VERSION` is its read-only alias, 02 §F2), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_COMMANDS_ENABLED`, `JOB_FAIL_ALERT_THRESHOLD`, `NETWORK_IMMUNITY_PERIOD_BLOCKS` (01); `KILL_SWITCH_PATH`, `SCORING_KILL_SWITCH_PATH`, `PAUSE_ALL_PATH`, `CONTROL_DIR`, `DB_BACKUP_DIR`, `DB_BACKUP_MIRROR_DIR`, `DB_BACKUP_STALE_HOURS`, `DISK_FREE_MIN_GB` (01/16); `QUANT_RESULTS_DIR` (13); `GITHUB_TOKEN`, `DISCORD_ENABLED`, `X_PROVIDER`, `ANTHROPIC_API_KEY`, `LLM_ENABLED`, `SUBTENSOR_RPC_URL`, `SUBTENSOR_RPC_ENABLED` (05/06/08/09/10; probes); `ALERT_DISPATCH_INTERVAL_SEC`, `ALERT_MIN_SEVERITY`, `ALERT_LATE_AFTER_HOURS`, `ALERT_BATCH_THRESHOLD`, `ALERT_MAX_ROWS_PER_TICK`, `ALERTS_ENABLED` are listed above but already built in Phase 0 (01 reads them). Retired from this spec: `API_HOST`/`API_PORT` (= 01's `HEALTH_HOST`/`HEALTH_PORT`), `STREAM_REPLAY_BUFFER`, `ALERT_DEDUPE_DEFAULT_MIN` (dedupe is 03's `dedupe_key`), `FRONTEND_PORT` (above), and 01's `TELEGRAM_ALERTS_ENABLED` (never built; `ALERTS_ENABLED` is the switch).
@@ -668,8 +695,9 @@ Consumed, owners in parentheses (not redefined here): `HEALTH_HOST` (01, loopbac
 | `telegram_bot` | `notifications.bot:TelegramBotTask` (`LongTask`) | LongTask | long-poll `getUpdates`, `TELEGRAM_POLL_TIMEOUT_SEC` (20 s) | — | — | **yes** (02 §E1) | `TELEGRAM_COMMANDS_ENABLED` | 11 | no | — | not gated (no declared max-age; 16 §2.5) |
 | `dereg_watch` | `notifications.watch:DeregWatchJob` | interval `minutes=DEREG_WATCH_INTERVAL_MIN` | every 60 min | 600 | 120 | no | `DEREG_WATCH_ENABLED` | 11 | no | 0 | 7,440 s |
 | `needs_review_digest` | `notifications.digest:NeedsReviewDigestJob` | cron `day_of_week=NEEDS_REVIEW_DIGEST_DAY hour=NEEDS_REVIEW_DIGEST_HOUR_UTC minute=0` | Mon 08:00Z | 3600 | 300 | no | `NEEDS_REVIEW_DIGEST_ENABLED` | 11 | no | 0 | weekly: 1,210,020 s (never trips) |
+| `market_brief_daily` (2026-10-23) | `notifications.brief:MarketBriefJob` | cron `MARKET_BRIEF_AT_UTC` | 06:00Z | 3600 | 120 | **yes** | `MARKET_BRIEF_ENABLED` | 11 | no | 0 | daily: 173,040 s (`spec_liveness_max_age`) |
 
-`JOB_TABLE` declares `providers=("telegram",)` for `alert_dispatch`, `needs_review_digest` and `telegram_bot` and none for `dereg_watch`; `telegram` belongs to no spend group, so nothing here is budget-paused. `alert_dispatch` and `telegram_bot` cannot be paused through a group target (02 §B12) and the control routes refuse them by id (§3.5).
+`JOB_TABLE` declares `providers=("telegram",)` for `alert_dispatch`, `needs_review_digest`, `market_brief_daily` and `telegram_bot` and none for `dereg_watch`; `telegram` belongs to no spend group, so nothing here is budget-paused. `alert_dispatch` and `telegram_bot` cannot be paused through a group target (02 §B12) and the control routes refuse them by id (§3.5).
 
 ### 6.2 Provider use
 
@@ -731,6 +759,7 @@ app/notifications/commands.py   CommandDispatcher, build_dispatcher(get_runtime)
 app/notifications/bot.py        TelegramBotTask(LongTask) wrapping TelegramBot.run
 app/notifications/watch.py      DeregWatchJob
 app/notifications/digest.py     NeedsReviewDigestJob, render_digest()
+app/notifications/brief.py      MarketBriefJob, render_brief() + `python -m app.notifications.brief` (§2.8, 2026-10-23)
 frontend/ui/index.html, app.js, style.css   (§8.6)
 tests/api/…, tests/notifications/…  (§9)
 ```
@@ -1080,6 +1109,7 @@ Phase 11 (this spec):
 - `test_route_for_rules`: `payload.backfilled` → digest for `tier_change`; unknown type → digest (logged once); `identity_changed` warning/chain/`github_repo` → immediate, `owner_coldkey` → digest; taxonomy `critical` → immediate, `warning` → digest; `registry_anomaly` third consecutive day → immediate, first → digest; `score_jump` → immediate; `insufficient_data`, `rank_instability`, `owner_extraction_detected`, `emission_disabled` → digest; `ALERT_MIN_SEVERITY=warning` demotes `collector_recovered`; a 30-h-old `tier_change` → `digest_late`.
 - `test_dispatch` (drives 01's job with this spec's data): pending rows of each route → `sendMessage` only for immediate ones; `alerted_at` set on every row with the right `payload.alert_route`; > threshold → one batched message; a `400` row retried as plain text then `alert_failed`; a `429` leaves `alerted_at` NULL.
 - `test_digest`: section 2 lists digest rows since the watermark (and backfilled rows as counts); the watermark stops below the oldest unrouted row; `/digest` does not move it; buckets `product_unset` and `blocked_sites` (7 `bot_challenge` days → listed, 6 → not).
+- `test_brief` (2026-10-23, on the seeded API fixture + a `P` slot, a `wb_dereg` row set and a network row): ≤ 20 lines, every `<pre>` line ≤ 32 characters, ≤ 4,096 UTF-16 units; top 5 excludes the low-confidence row; movers Δ and sign; tier change `↓ … D→F` listed before upgrades; flag raised in the window listed, one raised before `P` not; dereg line lists only `days_to_cull_static < 7`, stale network row marked; no `P` slot → "no slot 24 h earlier"; no scores → the short message; the job sends exactly one `sendMessage`, writes no `events` row, and returns `rows=0` without a token.
 - `test_dereg_watch`: SN47 in `WATCHLIST_NETUIDS=[47]` → one `dereg_watch(reason='bottom3')`, a second tick the same day → no new row (dedupe `occ|reason|day`); SN64 → none; stale tick (> 30 min) → no event; immunity with 5 d left → `immunity_ending`.
 
 Mocked: all egress (the Bot API transport is a fake; `Http.request` is monkeypatched where probes run), time through explicit `now` arguments (TTL, staleness, late rule — no `freezegun` dependency), filesystem via `tmp_root`.
@@ -1111,6 +1141,8 @@ sqlite3 data/taosentinel.db "select json_extract(payload,'$.alert_route'),count(
 # Telegram: /top, /sn 64, /flags, /movers, /health, /spend, /review, /needsreview, /digest, /team list 64, /pause x (confirm), /resume x — each answers within 5 s, no message > 4,096 chars
 # Telegram (2026-10-20 amendment): /menu → every home button and the 🏠 Home button on each screen; no <pre> line wraps on the operator's phone; /wallet → Main → Positions / a position / Performance 1D–1Y / Insights pages / Trades pages; terminal stopped → the "did not answer" reply
 # Alerts: python -c "…emit_event(db, event_type='tier_change', …)" on a scratch occupant → message ≤ 60 s, alerted_at set, payload.alert_route "immediate"
+python -m app.notifications.brief                         # (2026-10-23) the brief rendered from the live DB read-only: ≤ 20 lines, no <pre> line > 32 chars, nothing sent or written
+# Telegram (2026-10-23): one 🌅 Market brief arrives daily at MARKET_BRIEF_AT_UTC as a plain message (no alert sound beyond a normal message); /health.collectors.market_brief_daily.last_ok advances daily
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8090/ui/subnet/64   # 200 text/html
 # Browser http://127.0.0.1:8090/ui: /ui/matrix sorts by composite, tier filter, CSV downloads; /ui/subnet/64 chart + evidence (absent vs failure badges) + team form (201, token prompt on 401) + verify form (409 with one source); /ui/events filters; header dot green/amber
 ```
@@ -1173,3 +1205,8 @@ Resolved on 2026-09-23 and removed: column ownership (03's DDL, 02 §B7), alert 
   - §8.4a (new): read-only wallet view rendering the τ Terminal's API; joins only TaoSentinel's tier/flags; turnover rule. 19 §1's "TaoSentinel never reads a wallet" holds (it reads the terminal, stores nothing).
   - §8.5: every read screen re-specified (examples from the live DB). Fixes found while reviewing against live data: `/top` said "No scores for ts-1.0 yet" when 128 rows existed but all were below confidence 0.4 (18:00Z catch-up run with P1–P3 null) → diagnosis + `Show anyway`; `/movers` was silently empty because the first official slot (19 Oct) is younger than the window → says so and offers 1d.
   - §5: `TERMINAL_API_URL` (loopback-only validator; 01 inventory updated).
+- 2026-10-23 (spec 20 N3 item 2; reviewed against the live DB before building):
+  - §2.8 (new) daily market brief `market_brief_daily` (§6.1 row, §5 keys `MARKET_BRIEF_ENABLED`/`MARKET_BRIEF_AT_UTC`, §8.1 `brief.py`, §9 `test_brief`, §10 lines). A plain send, `ops_exempt`, never an event (nothing pages).
+  - Review findings: (1) 20 N3 sourced the dereg watch from `wb_dereg_network_hourly`, which is network-level (one row per hour, no netuid); the per-subnet distance is 19 §2.4's `days_to_cull_static` in `metric_values` — the brief reads that and takes only `eta_next_registration_days` from the network row. (2) Every live official slot since 2026-10-19 has `scores.regime = UNKNOWN` (`regime_daily.n_subnets = 0`, `thin_universe`), while the provisional slots of the same days classify `DISPERSED`; the 00:00Z brief therefore shows `UNKNOWN` until 05/12 fix it (BUILD-LOG 2026-10-23 N3 entry) — the brief shows the stored label rather than borrowing a provisional one. (3) Tier changes run ≈ 10 per day, hence the one-line, capped tier line. (4) "populated / 45" made exact: non-null for at least half the slot's scored occupants (30/45 on 2026-10-23 12:00Z).
+  - Line 3's caption presents the score as a risk filter (first 13 verdict: no 7-d return signal; dereg ratios 3–14×).
+  - §3.5 SSE (bug found while verifying 15 §2.9.1 against the live stream): `StreamHub` set its watermarks once and stopped polling when the last subscriber left, so a later client **without** `Last-Event-ID` received every row written while nobody listened (a live connect on 2026-10-23 got events up to id 2436, two of them old `red_flag_raised`). `hub.subscribe` now re-initialises the watermarks when the hub is idle; a reconnect id still replays from SQLite. `test_sse_hub_frames_and_replay` covers it.

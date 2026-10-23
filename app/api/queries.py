@@ -295,6 +295,65 @@ async def subnet_names(db: "Database") -> dict[int, str]:
             if r["name"]}
 
 
+# ── market brief (§2.8) and `python -m app status` ───────────────────────────────────────────────────────────
+async def scores_at(db: "Database", *, spec: str, as_of: int) -> dict[str, dict]:
+    """``occupant_key → row`` of the non-shadow ``scores`` at exactly ``as_of`` for current active occupants."""
+    rows = await db.fetchall(
+        f"SELECT {_SCORE_COLS} FROM scores s JOIN subnets sub ON sub.occupant_key = s.occupant_key "
+        "WHERE s.spec_version = ? AND s.shadow = 0 AND s.as_of = ? AND s.status = 'active'", (spec, int(as_of)))
+    return {r["occupant_key"]: _score(r) for r in rows}
+
+
+async def flag_changes(db: "Database", *, spec: str, after: int, upto: int) -> tuple[list[dict], list[dict]]:
+    """(raised, cleared) ``red_flag_state`` rows of current occupants with ``raised_at``/``cleared_at`` ∈ (after, upto]."""
+    rows = await db.fetchall(
+        "SELECT f.flag, f.raised_at, f.cleared_at, s.netuid, s.name FROM red_flag_state f "
+        "JOIN subnets s ON s.occupant_key = f.occupant_key WHERE f.spec_version = ? "
+        "AND ((f.raised_at > ? AND f.raised_at <= ?) OR (f.cleared_at > ? AND f.cleared_at <= ?)) ORDER BY s.netuid, f.flag",
+        (spec, int(after), int(upto), int(after), int(upto)))
+    raised = [r for r in rows if r["raised_at"] is not None and after < r["raised_at"] <= upto]
+    cleared = [r for r in rows if r["cleared_at"] is not None and after < r["cleared_at"] <= upto]
+    return raised, cleared
+
+
+async def days_to_cull(db: "Database", *, now: int) -> tuple[int | None, list[dict]]:
+    """Newest ``as_of ≤ now`` of 19 §2.4's ``days_to_cull_static`` and its ``ok`` rows for current active occupants."""
+    as_of = await db.fetchval("SELECT MAX(as_of) FROM metric_values WHERE metric_key = 'days_to_cull_static' "
+                              "AND stage = 'raw' AND as_of <= ?", (int(now),))
+    if as_of is None:
+        return None, []
+    rows = await db.fetchall(
+        "SELECT m.value, s.netuid, s.name FROM metric_values m JOIN subnets s ON s.occupant_key = m.occupant_key "
+        "WHERE m.metric_key = 'days_to_cull_static' AND m.stage = 'raw' AND m.as_of = ? AND m.status = 'ok' "
+        "AND m.value IS NOT NULL AND s.status = 'active' ORDER BY m.value, s.netuid", (int(as_of),))
+    return int(as_of), rows
+
+
+async def wb_network_latest(db: "Database") -> dict | None:
+    return await db.fetchone("SELECT hour_ts, eta_next_registration_days, k_30, observed_at FROM wb_dereg_network_hourly "
+                             "ORDER BY hour_ts DESC LIMIT 1")
+
+
+async def norm_coverage(db: "Database", *, spec: str, as_of: int) -> tuple[int, dict[str, int]]:
+    """(active occupants scored at the slot, ``metric_key → non-null stage='norm' values`` at the slot)."""
+    n = await db.fetchval("SELECT COUNT(*) FROM scores WHERE spec_version = ? AND shadow = 0 AND as_of = ? "
+                          "AND status = 'active'", (spec, int(as_of)))
+    rows = await db.fetchall(
+        "SELECT metric_key, SUM(value IS NOT NULL) AS v FROM metric_values INDEXED BY ix_metric_values_slot "
+        "WHERE stage = 'norm' AND spec_version = ? AND as_of = ? GROUP BY metric_key", (spec, int(as_of)))
+    return int(n or 0), {r["metric_key"]: int(r["v"] or 0) for r in rows}
+
+
+def populated_by_pillar(n_scored: int, cov: dict[str, int]) -> dict[str, tuple[int, int]]:
+    """``pillar → (populated, scored keys)``; populated = non-null for at least half the slot's scored occupants."""
+    from app.features.registry import PILLARS, scored
+    out: dict[str, tuple[int, int]] = {}
+    for p in PILLARS:
+        keys = [d.key for d in scored(p)]
+        out[p] = (sum(1 for k in keys if n_scored and cov.get(k, 0) * 2 >= n_scored), len(keys))
+    return out
+
+
 # ── needs-review buckets (§8.3) ──────────────────────────────────────────────────────────────────────────────
 async def needs_review(db: "Database", *, now: int, blocked_days: int = 7, spec: str | None = None) -> dict[str, list]:
     import app.config as app_config

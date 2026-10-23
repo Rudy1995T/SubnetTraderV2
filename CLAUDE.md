@@ -19,8 +19,8 @@ the systemd unit `taosentinel` (127.0.0.1:8090). The repo is **public** (github.
 
 ## Running things
 ```bash
-.venv/bin/python -m app check                 # schema + job table (57 declared)
-.venv/bin/python -m pytest -q                 # 1169 tests, ≈ 10 min; -m smoke for the fast path; tests/quant alone ≈ 1 min
+.venv/bin/python -m app check                 # schema + job table (58 declared)
+.venv/bin/python -m pytest -q                 # 1174 tests, ≈ 10 min; -m smoke for the fast path; tests/quant alone ≈ 1 min
 make lint                                     # compileall
 curl -s localhost:8090/health | python3 -m json.tool | head -40
 curl -s 'localhost:8090/api/v1/scores/latest' | head -c 600

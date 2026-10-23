@@ -203,6 +203,8 @@ Outputs per factor and horizon: mean daily Spearman IC, its t-stat on non-overla
 
 **Boundary.** The terminal (`~/tao-terminal`) calls TaoSentinel over HTTP on the server side (the page's CSP is `connect-src 'self'`): `GET {workbench_url}/api/v1/wb/screener` (cached 60 s) and `/api/v1/wb/results` (cached 10 min), timeout 5 s. It never reads TaoSentinel's DB for workbench data and never POSTs to it. TaoSentinel down → the Screener tab and the dereg parts of the checks say "workbench unavailable"; charts, positions and the terminal-side checks keep working.
 
+*(2026-10-23)* The terminal's 🛡 Sentinel tab (scores table, drawer, tier legend, flag markers, red-flag desktop alerts) sits beside the Screener; it is specified in 15 §2.9.1 because it reads the 15 consumer's store.
+
 #### 2.9.1 Terminal endpoints (`app/workbench.py`, routes in `app/server.py`)
 | route | returns |
 |---|---|
@@ -385,3 +387,4 @@ Local: `research/03-*.md` (2026-10-09), `research/01-factor-validation-tooling.m
 - 2026-10-16 (rebuild + implementation): status → built W2–W6. Folded 02 §K into the text. Chain facts re-read: immunity 432,000 blocks (changed ~2026-10-13), `LastRateLimitedBlock[0x02]`, runtime-API lock cost and `I_eff`; `wb_dereg` reads the probed immunity. Changes vs §K (02 amended the same day): the network weather lives in a new `wb_dereg_network_hourly` table instead of new `chain_network_hourly` columns (no shared row with the SSE recorder); `mp_vs_spot` → `spot_vs_mp`; `dereg_recovery_ratio` deferred; new keys `repo_pushed_days` (source `github`), `spot_rank`; jobs declared at phase 3, `wb_technicals` a single hourly :12 trigger, `wb_github_probe` hourly :25; upload is a raw-body POST (no multipart dependency); vision through the `anthropic` SDK with server-side fallbacks; routes `/presets`, `/notes` replace `POST /wb/weights`; W6 is a workbench study until 13 exists; W4b moved to the owner specs. Exact window/seed, staleness, rank and cull-line-zero rules added.
 - 2026-10-16: reconciled by 02 §K (names, owners, conventions).
 - 2026-10-09: first draft from the research run.
+- 2026-10-23: §2.9 points to 15 §2.9.1 (the τ Terminal's Sentinel tab, spec 20 N3 item 3).

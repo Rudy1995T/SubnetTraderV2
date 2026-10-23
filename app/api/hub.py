@@ -130,6 +130,10 @@ class StreamHub:
         """Register (replaying from ``last_id`` first); the caller checks the connection cap."""
         sub = Subscriber(types)
         async with self._lock:
+            if not self.subs:
+                # Idle hub: polling stopped with the last subscriber, so the watermarks are old. Nobody missed the
+                # rows written meanwhile; a new client starts from now (a reconnect id still replays, below).
+                self._ready = False
             await self._init()
             if last_id is not None:
                 await self._replay(sub, last_id)

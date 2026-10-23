@@ -238,6 +238,24 @@ Before Phase C the operator runs the export (or copies the hourly file) to `~/Do
 - The manual ticket's checks (`/api/workbench/checks`, buys only, when `enabled` and `ticket_checks`) gain one line: `TaoSentinel: quality 41 · tier D · conf 0.52 · flags repo_gone → the bot would size ×0.66` (`warn` on a block flag or a factor ≤ 0.75, else `info`; "no score" / "score is stale" → ×1.00). Advice only: nothing is resized or blocked, and no decision row is written.
 - Alerts (feed down at `alert_after_failures` and on recovery, spec_version not accepted, active downgraded, hook error, kill engaged/cleared, log failures at 8) go to `notify-send` and the terminal's SSE `alert` event.
 
+#### 2.9.1 Sentinel tab (added 2026-10-23 — spec 20 N3 item 3; extends 19 §2.9 W7)
+
+The terminal's view of the scores, next to the Screener. TaoSentinel's `/ui` stays the admin view. Presented as a **risk filter, not a buy signal**: the first 13 verdict (2026-10-23) found no link to 7-day returns and 3–14× more deregistrations in the low tiers, so the table opens sorted by composite **ascending** (riskiest first) and its caption says so. Nothing here sizes, blocks or advises a trade beyond §2.9's existing ticket line.
+
+**Base URL.** Every call below goes to `scheme://host:port` of `[sentinel] url` (no new key). The page's CSP is `connect-src 'self'`, so the browser only talks to the terminal; the terminal server makes the TaoSentinel calls (as 19 §2.9 does for the workbench). Everything is off while `enabled = false` (routes answer 503 `{"error": "TaoSentinel feed disabled in config.toml [sentinel]"}`; the tab says the same).
+
+| terminal route | source | cache | returns |
+|---|---|---|---|
+| `GET /api/sentinel` (existing) | the consumer's TTL store | — | rows gain `pillars` (`{P1..P6: float\|null}`, display only — §3.2) and `name` (the terminal's `subnets` table); the body gains `base_url` |
+| `GET /api/sentinel/{netuid}/detail` | 14 `GET /api/v1/subnets/{netuid}` | 60 s, last good kept 1 h | the 14 body unchanged; 404 passed through; unreachable → 502 `{"error": …}` |
+| `GET /api/sentinel/{netuid}/history?days=` | 14 `GET /api/v1/scores/history?occupant={netuid}&days=&official_only=1` (`days` 1–730, default 365) | 10 min, last good kept 1 h | `{netuid, occupant_key, points: [{as_of, composite, tier, red_flags}], flag_marks: [{ts, flag, kind: "raised"\|"cleared"}]}` — `flag_marks` = the official days on which a flag name enters or leaves `red_flags` versus the previous point (the first point's flags are not marks: their start is unknown) |
+
+**Tab "🛡 Sentinel"** (bottom panel): a strip with the feed state (`mode`, fresh/stale counts, newest slot and run kind, kill/stale banner) and the caption; filters All / ● Held / ★ Favourites / 🚩 Flagged + search; a sortable table of every row in the store: ★, subnet, composite, tier badge (A–F colours), confidence (rows below `min_confidence` dimmed, "low conf"), Health, one bar per pillar P1–P6 (value in the tooltip, `null` = empty bar "n/a"), red flags, age of the slot. A row click opens the subnet chart and the **drawer** (right side of the panel), filled from `detail` + `history`: tier, composite, Health, Velocity, confidence, slot, run kind, regime; a 90-day composite sparkline (official points); pillar bars; red flags as objects (`flag ×multiplier`, since, state, origin); `explain.top_positive` / `top_negative` drivers; the 45 evidence rows grouped by pillar with 14 §4's wording (`absent` → "verifiable absence", `failed`/`none` → "collection failure", `not_applicable` → "n/a"); the last 10 events; a link to `{base_url}/ui/subnet/{netuid}`.
+
+**Chart.** For the open subnet: a legend line `🛡 tier B · composite 61.2 · conf .62 · flags dereg_imminent` (tier colour; "no TaoSentinel score" when the store has none) beside 19's dereg line, and flag markers from `history.flag_marks` (raised: red square above the bar, `⚑ <flag>`; cleared: grey, `✓ <flag>`), snapped to bars like the trade markers, on every timeframe.
+
+**Desktop alerts** (`app/sentinel/stream.py`, `SentinelStream`, a thread started with the runtime; idle while `enabled = false`): one connection to 14's `GET /api/v1/stream?types=event` (counts against TaoSentinel's 8). For each `event: event` frame with `event_type = "red_flag_raised"`, `payload.backfilled` not true, `event_at` within the last 24 h and `netuid` in held (≥ 0.01 τ at spot, as 19 §2.9.3) ∪ ★ favourites: `notify-send` "TaoSentinel: red flag on SN47 <name>" / "`<flag>` ×`<multiplier>`" and the terminal's SSE `alert` (`kind: "sentinel"`, `symbol: "SN47"`) — once per event id. Reconnects send `Last-Event-ID` (14 replays the gap from SQLite); a terminal restart starts live (no replay: Telegram pages for anything missed while the terminal was down, 14 §11 Q6 "keep both"). Backoff 5 s doubling to 300 s; errors go to the `log` table (`component='sentinel'`); `/api/status.sentinel.stream` = `{connected, last_event_id, alerts_sent, last_error}`.
+
 ---
 
 ## 3. Data contract
@@ -300,7 +318,7 @@ Rules:
 
 ### 3.2 Consumer model
 
-`~/tao-terminal/app/sentinel/models.py` (`ScoreRow`, `FeedPayload`) depends only on Pydantic v2 and the stdlib and does no I/O. It is the 2026-09-24 model unchanged except `ttl_seconds ≤ TTL_WIRE_MAX = 30 × 86 400` (§0). Receive-time checks (skew, whitelist) live in `ScoreStore.ingest`. TaoSentinel keeps a mirror of it in `tests/api/test_reads.py` because the repos cannot import each other.
+`~/tao-terminal/app/sentinel/models.py` (`ScoreRow`, `FeedPayload`) depends only on Pydantic v2 and the stdlib and does no I/O. It is the 2026-09-24 model unchanged except `ttl_seconds ≤ TTL_WIRE_MAX = 30 × 86 400` (§0). *(2026-10-23, §2.9.1)* `ScoreRow` gains `pillars: dict[str, float | None] | None` for display: keys outside `P1..P6` are dropped and a malformed value (not a mapping, or a value outside [0, 1]) becomes `None` **without rejecting the batch** — a display field must never stop the feed; the factor curve does not read it. `ScoreEntry` carries it; the schema pin was regenerated deliberately. Receive-time checks (skew, whitelist) live in `ScoreStore.ingest`. TaoSentinel keeps a mirror of it in `tests/api/test_reads.py` because the repos cannot import each other.
 
 Pins: `tests/fixtures/scores_latest.schema.json` (= `FeedPayload.model_json_schema()`; a change fails `test_schema_pin` until regenerated deliberately) and the golden bodies `scores_latest_14_example.json`, `scores_latest_empty.json`, `scores_latest_producer.json` (real 14 output), plus `scores_latest_live.json` once verify step T2 saves it.
 
@@ -542,6 +560,8 @@ Emergency fallback at any phase: `touch ~/tao-terminal/SENTINEL_KILLED` (instant
 | `test_sentinel_client.py` (8) | 200 ⇒ ingest + log rows, re-poll adds 0; URL carries `spec` and `include_insufficient`; ETag ⇒ `If-None-Match`, 304 ⇒ ok without ingest, never sent without an ETag; auth header only when set; 30 s gap; 401/503/timeout/bad JSON/future skew ⇒ one batch row each with its reason, latched alert at the threshold and on recovery; spec reject is not a failure (latched alert, `accepted=0` rows); log failure counted, store still updated; run loop idle when disabled, prime poll when enabled. |
 | `test_sentinel_hook.py` (17) | byte-identical `amount_in` for disabled, no store, observe, killed, stale, missing, low confidence; disabled never calls the store; active + verdict ⇒ `round(base × f, 6)` through `execute`, decision row linked to the trade; active without verdict ⇒ observe; **never creates an entry** (per-trade cap and daily cap refused at base although 0.5 × base would pass, no decision row); 0.01 τ floor; store raising and logger raising ⇒ `hook_error`, base amount; re-preview failure ⇒ base preview; opt-in block (active only, observe never blocks); strategy tags; sells refused; rows survive reopen. |
 | `test_sentinel_telemetry.py` (3) | window 29.9 d in / 30.1 d out; off / failed / unexecuted / blocked / other-spec rows excluded; coverage 0.75; applied 1.0 for observe, `amount/base` for active; `since`/`days`; empty ⇒ coverage null; atomic write; export `--out -` exit 0, missing DB exit 2. |
+| `test_sentinel_tab.py` (2026-10-23) | rows carry `pillars`/`name`/`base_url`; `detail`/`history` proxied with `httpx.MockTransport` (cache hit, 404 passthrough, unreachable → 502, last good served, disabled → 503); `flag_marks` raised/cleared transitions and no mark for the first point; malformed `pillars` → `None`, batch accepted. |
+| `test_sentinel_stream.py` (2026-10-23) | SSE frame parsing (multi-line data, comments, ids); `red_flag_raised` on a held or ★ netuid → one notify + one hub alert; other netuids, other types, `backfilled` and `event_at` older than 24 h → none; a repeated id → none; reconnect sends `Last-Event-ID`; disabled → no connection. |
 | `test_sentinel_api.py` (5) | `/api/sentinel` rows (`fresh`, `expires_at`, `would_apply_factor`, `applied_factor`, `reason`); 404 for an unknown netuid; no ingest route; kill/resume/reload need the terminal token; reload picks up config + verdict and keeps old settings on a bad section; ticket advice line levels; coverage job writes the telemetry file. |
 
 TaoSentinel: `tests/api/test_reads.py::test_scores_latest_killed_and_empty` now also asserts that the TTL passing alone changes the ETag (fails without the fix).
@@ -565,6 +585,12 @@ TaoSentinel: `tests/api/test_reads.py::test_scores_latest_killed_and_empty` now 
 - L2 `score_feed_log` grows by about 130 accepted rows per new slot `as_of` (4 per day), not per poll.
 - L3 the ticket's Checks for a buy show the `TaoSentinel: …` line.
 - L4 `systemctl stop taosentinel` for longer than `ttl_seconds` (or set 14's `SCORE_FEED_TTL_SEC=60`) → `stale_count` = the former `fresh_count`, `consecutive_failures` climbs, one desktop alert at 8 and one on recovery.
+
+**Sentinel tab (2026-10-23, §2.9.1; needs `enabled = true` and a `tao-terminal` restart)**
+- S1 `curl -s http://127.0.0.1:8787/api/sentinel | jq '.scores[] | select(.netuid==64) | {composite, tier, pillars}'` → the same `composite` and `tier` as `curl -s 'http://127.0.0.1:8090/api/v1/scores/latest?spec=ts-1.0&include_insufficient=1' | jq '.scores[] | select(.netuid==64) | {composite, tier}'` (20 N3 verify).
+- S2 `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/api/sentinel/64/detail` → 200; `curl -s 'http://127.0.0.1:8787/api/sentinel/47/history' | jq '(.points|length), (.flag_marks|length)'` → ≥ 200, ≥ 1.
+- S3 `curl -s http://127.0.0.1:8787/api/status | jq .sentinel.stream` → `connected: true`.
+- S4 Browser `http://127.0.0.1:8787/`: 🛡 Sentinel tab lists ≈ 128 rows sorted riskiest first; a row opens the chart and the drawer (sparkline, pillars, flags, drivers, evidence, events); the legend shows the tier line; SN47's 1d chart shows flag markers.
 
 **Phase B (needs v2 B1)**
 - B1 `journalctl --user -u tao-bot | grep 'SENTINEL OBSERVE' | tail -3` shows `would x0.xxx (q=…, reason=curve)`; `touch SENTINEL_KILLED` ⇒ next entry `would x1.000 … reason=killed`; `rm` restores.
@@ -621,3 +647,4 @@ TaoSentinel: `tests/api/test_reads.py::test_scores_latest_killed_and_empty` now 
   - Bugs fixed: 14's ETag ignored `stale` (304 hid a TTL flip); `INSERT OR IGNORE` dropped NOT NULL-violating log rows; halved orders could fall under the 0.01 τ chain minimum; `ttl_seconds > 86400` rejected the whole batch.
   - Q1 resolved (TTL 25 200); Q14 moot; new Q16–Q18. Contract checked against a real 14 body (fixture `scores_latest_producer.json`) and 13's code.
   - Built: 11 modules, 82 tests (169 terminal tests green), TaoSentinel API tests green.
+- 2026-10-23 (spec 20 N3 item 3, reviewed against the live feed and the terminal code): §2.9.1 Sentinel tab — table, drawer (`detail`/`history` proxied server-side because of the page CSP), tier legend line and flag markers, `red_flag_raised` desktop alerts for held/★ subnets over 14's SSE; §3.2 `pillars` display field (malformed → `None`, never a batch reject; schema pin regenerated); §9 two test files; §10 S1–S4. Presented as a risk filter (13 verdict 2026-10-23). `[sentinel] enabled = true, mode = "observe"` set in the terminal's `config.toml` (20 N1 item 5).

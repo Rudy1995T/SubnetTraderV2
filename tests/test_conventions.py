@@ -156,7 +156,7 @@ def test_e1_trigger_kinds_and_exemptions():
     assert {s.id for s in JOB_TABLE if s.kind == "longtask"} == {"chain_sse", "discord_gateway", "telegram_bot"}
     assert {s.id for s in JOB_TABLE if s.ops_exempt} == {
         "backup_daily", "ops_guard_5m", "ops_digest_daily", "cost_ledger_hourly", "log_retention_daily",
-        "storage_retention_daily", "alert_dispatch", "telegram_bot"}
+        "storage_retention_daily", "alert_dispatch", "telegram_bot", "market_brief_daily"}   # 02 §E1 (amended 2026-10-23)
     assert {s.id for s in JOB_TABLE if s.startup_catchup} == {
         "registry_identity", "tmc_daily", "chain_features", "github_org_enum", "github_activity", "github_metrics",
         "owner_collect_daily", "integrity_features", "scoring_6h"}
@@ -164,7 +164,7 @@ def test_e1_trigger_kinds_and_exemptions():
 
 def test_e2_job_table_complete():
     ids = [s.id for s in JOB_TABLE]
-    assert len(ids) == len(set(ids)) == 57
+    assert len(ids) == len(set(ids)) == 58
     assert not RETIRED_JOB_IDS & set(ids)
     assert {"wb_discord_counts"}.isdisjoint(ids)                          # §K6 retired before it was built
 

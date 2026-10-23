@@ -52,6 +52,13 @@ async def test_sse_hub_frames_and_replay(seeded, cfg):
     assert frames[0].data["netuid"] == 47 and frames[1].data["event_type"] == "manual_entry"
     assert frames[1].id == f"{sid + 1}-{eid + 1}"
     hub2.unsubscribe(sub2)
+    # idle hub (no subscriber while rows were written): a client without an id starts from now, no backlog
+    await emit_event(db, event_type="manual_entry", occupant_key=OCC64, netuid=64, event_at=D0, observed_at=D0,
+                     payload={"kind": "note", "by": "api", "row_id": 2, "summary": "y", "evidence_url": None},
+                     dedupe_key=None, source="api", run_id=None)
+    sub3 = await hub2.subscribe(frozenset({"score", "event"}), None)
+    assert await hub2.poll_once() == 0 and await _drain(sub3) == []
+    hub2.unsubscribe(sub3)
 
 
 async def test_sse_replay_too_large_and_slow_consumer(seeded, cfg):

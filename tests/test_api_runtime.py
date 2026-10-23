@@ -40,7 +40,7 @@ async def test_health_document(rt, app_client, tmp_root):
                   "kill_switch_active", "pause_all_active", "scoring_killed", "scheduler", "collectors", "tasks",
                   "spend", "rate_limits", "db", "alerts", "scores", "ops", "telegram_configured"):
             assert k in h, k
-        assert h["scheduler"]["declared"] == 57 and h["scheduler"]["available"] == EXPECTED_AVAILABLE
+        assert h["scheduler"]["declared"] == 58 and h["scheduler"]["available"] == EXPECTED_AVAILABLE
         assert h["spend"] == rt.costs.snapshot()
         for g in ("x", "llm", "taostats", "tmc"):
             assert {"usd", "cap_usd", "pct", "paused", "reserved_usd"} <= set(h["spend"][g])
@@ -71,7 +71,7 @@ async def test_services_and_jobs(rt, app_client):
         s = (await app_client.get("/api/health/services")).json()["services"]
         assert s["database"]["ok"] and s["scheduler"]["ok"] and "disk" in s
         jobs = (await app_client.get("/api/v1/jobs")).json()["jobs"]
-        assert len(jobs) == 57 and sum(1 for j in jobs if j["available"]) == EXPECTED_AVAILABLE
+        assert len(jobs) == 58 and sum(1 for j in jobs if j["available"]) == EXPECTED_AVAILABLE
     finally:
         sched.shutdown(wait=False)
 
@@ -167,10 +167,10 @@ def test_cli(tmp_path):
     assert r.returncode == 0, r.stderr
     assert f"schema_version={CODE_SCHEMA_VERSION}" in r.stdout and "sqlite_version=" in r.stdout
     early = f" + early {','.join(sorted(EARLY_JOBS))}" if EARLY_JOBS else ""
-    assert (f"OK jobs=57 declared (54 jobs + 3 LongTasks), {EXPECTED_AVAILABLE} available (phase {BUILT_PHASE}"
-            f"{early}), {57 - EXPECTED_AVAILABLE} unavailable") in r.stdout
+    assert (f"OK jobs=58 declared (55 jobs + 3 LongTasks), {EXPECTED_AVAILABLE} available (phase {BUILT_PHASE}"
+            f"{early}), {58 - EXPECTED_AVAILABLE} unavailable") in r.stdout
     r = _cli(tmp_path, "jobs")
-    assert r.returncode == 0 and len([l for l in r.stdout.splitlines()[1:] if l.strip()]) == 57
+    assert r.returncode == 0 and len([l for l in r.stdout.splitlines()[1:] if l.strip()]) == 58
     r = _cli(tmp_path, "run-job", "log_retention_daily")
     assert r.returncode == 0, r.stdout + r.stderr
     r = _cli(tmp_path, "run-job", "no_such_job")            # every declared job is built since 2026-10-22
@@ -226,7 +226,7 @@ async def test_smoke_main(tmp_root, settings_override, monkeypatch):
         rt = R.get_runtime()
         assert len(rt.jobs) + len(rt.tasks) == EXPECTED_AVAILABLE
         body = json.loads(tg.calls[0].request.content)["text"]
-        assert "TaoSentinel online" in body and f"{EXPECTED_AVAILABLE} available / 57 declared" in body
+        assert "TaoSentinel online" in body and f"{EXPECTED_AVAILABLE} available / 58 declared" in body
         rt.shutdown_event.set()
         await asyncio.wait_for(task, 12)
     assert exits == [0]

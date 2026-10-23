@@ -1453,3 +1453,69 @@ the old union under `c6_survival.<scope>.union`. `tests/quant/test_gate.py::test
 first verdict's in-sample numbers (dereg-only ratios 2.9–13.7), so they are not evidence for it: a c6 pass counts only on
 survival cross-sections dated after 2026-10-23 (first qualifying verdict ≈ 2027-01-21). The 2026-10-23 verdict files stay
 as written (NO-GO under the rule then in force).
+
+## 2026-10-23 — spec 20 N3: daily market brief, `python -m app status`, τ Terminal Sentinel tab (items 2–4)
+
+**Spec first** (each amended before code, Changelogs updated): 14 §2.8 (new: brief), §1, §3.1, §5, §6.1, §8.1, §9, §10;
+01 §2.7 job table (58 = 55 jobs + 3 LongTasks), §2.14 `status`, §5 inventory (660 keys), §10; 02 §E1 (`market_brief_daily`
+is `ops_exempt`) and §E2 (job id); 15 §2.9.1 (new: Sentinel tab), §3.2 (`pillars` display field), §9, §10 S1–S4;
+19 §2.9 pointer; 20 N3 status; INDEX rows 14/15/20. Item 1 (Telegram walk, 14 §10) is the operator's.
+
+**Reviewed against live data before building (findings):**
+1. 20 N3 sourced the brief's dereg watch from `wb_dereg_network_hourly`. That table is network-level (one row per hour,
+   no netuid). The per-subnet "distance to the next cull line" is 19 §2.4's evidence key `days_to_cull_static` in
+   `metric_values` (`eta_next_registration_days + (rank₃₀ − 1)·reg_gap_mean`); at 2026-10-23 17:00Z it selected exactly
+   SN70 (3.4 d, rank 1 of k₃₀ = 4; next subnet 10.5 d). 14 §2.8 reads that; the network row only supplies the ETA.
+2. **Official slots classify the regime `UNKNOWN`** — every live 00:00Z slot since 2026-10-19 has `regime_daily.n_subnets = 0`,
+   `thin_universe = 1` (v_w 0.15 instead of 0.25), while the 06/12/18Z provisional slots of the same days say `DISPERSED`.
+   Read now, the same window (`chain_hourly` hour_ts ∈ (S − 24 h, S], `observed_at ≤ cutoff`) holds 1,920 rows / 128
+   subnets, so the SSE hourly rows seem to land after the 00:15Z run with `observed_at = hour_ts + 3600`, and
+   `regime_daily` is `INSERT OR IGNORE`, so the `UNKNOWN` sticks. **Not fixed here** (05/12; changes `ts-1.0` outputs →
+   `ts-1.0.1` or N6). The brief shows the stored label.
+3. Tier changes run ≈ 10 a day (the brief caps that line at 8 + "+k"); "populated metrics / 45" made exact: non-null
+   on ≥ half of the slot's scored occupants → 30/45 at 2026-10-23 12:00Z (P1 7/10, P2 10/10, P3 5/6, P4 6/7, P5 1/8, P6 1/4).
+4. The τ Terminal page's CSP is `connect-src 'self'` → the drawer, history and SSE are fetched by the terminal server
+   (as 19 §2.9 does), base URL from `[sentinel] url` (no new key). The feed already carried `pillars` and `name`, but the
+   consumer model dropped them (`extra="ignore"`): `ScoreRow.pillars` added as a display-only field that becomes `None`
+   when malformed instead of rejecting the batch; schema pin regenerated (diff = that property only); TaoSentinel's
+   mirror model in `tests/api/test_reads.py` now asserts the producer never sends a malformed one.
+5. **14 SSE hub bug** (found by the live check of 15 §2.9.1): `StreamHub` initialised its watermarks once and stopped
+   polling when the last subscriber left, so any later client *without* `Last-Event-ID` received every row written
+   while nobody listened — a test connection got events up to id 2436, two of them old `red_flag_raised`. Fixed in
+   `app/api/hub.py` (an idle hub re-initialises on subscribe; a reconnect id still replays); test extended (fails
+   before the fix). The terminal also ignores `red_flag_raised` older than 24 h.
+6. Seen on the way: `youtube_poll` failing (`ProviderError: youtube: all 1 feeds failed`, 05:32Z); 56 active red flags;
+   130 open review items. Recorded only.
+
+**Built — TaoSentinel:** `app/notifications/brief.py` (`MarketBriefJob`, `render_brief`, `python -m app.notifications.brief`
+dry-run), `app/api/queries.py` (`scores_at`, `flag_changes`, `days_to_cull`, `wb_network_latest`, `norm_coverage` —
+`INDEXED BY ix_metric_values_slot`: the planner's skip-scan on `ix_metric_values_xsec` took 6.4 s cold —
+`populated_by_pillar`), `app/jobs.py` row `market_brief_daily` (owner 14, phase 11, cron `MARKET_BRIEF_AT_UTC` 06:00Z,
+`MARKET_BRIEF_ENABLED`, `ops_exempt`, provider `telegram`, timeout 120), `app/config.py` + `.env.example` (2 keys, HH:MM
+validated), `app/__main__.py` `status`, `app/storage/db.py` `ReadOnlyDatabase` (reader-only `mode=ro` + `query_only`),
+`app/api/hub.py` fix. Tests: `tests/notifications/test_brief.py` (3), `tests/api/test_status_cli.py` (2),
+`tests/api/test_stream.py` (idle-hub case), counts 57 → 58 / 658 → 660 in `test_jobs`, `test_conventions`,
+`test_api_runtime`, `test_config`; `tests/conftest.py` `AVAILABLE_BY_PHASE[11] = 58`.
+
+**Built — τ Terminal (`~/tao-terminal`, not a git repo):** `config.toml` `[sentinel] enabled = true, mode = "observe"`
+(backup of the previous file in the session scratchpad); `app/sentinel/models.py` + `store.py` (`pillars`),
+`app/sentinel/remote.py` (`SentinelReader`: cached detail 60 s / history 10 min, last good 1 h; `flag_marks`),
+`app/sentinel/stream.py` (`SentinelStream`, SSE parser, held ∪ ★ filter, once per event id, ≤ 24 h, Last-Event-ID,
+backoff 5→300 s), `app/sentinel/runtime.py` (`reader`, `stream`, `base_url`, `health.stream`, rows carry `pillars`),
+`app/server.py` (`/api/sentinel` + `name`/`base_url`, `/api/sentinel/{n}/detail`, `/history`, stream thread,
+`watched_netuids`, `sentinel_flag_alert`), `static/panels.js` (🛡 Sentinel tab + drawer), `static/app.js` (tier legend
+line, flag markers, `loadSentinel` every 2 min), `static/chart.js` (`setFlagMarks`), `static/styles.css`, README,
+`config.example.toml`. Tests: `test_sentinel_tab.py` (3), `test_sentinel_stream.py` (3), `test_static_syntax.py`
+(8 — every `static/*.js` compiled in V8 via mini-racer; there is no Node here).
+
+**Verified (read-only / offline):** `python -m app.notifications.brief` on the live DB → 19 lines, `<pre>` rows ≤ 30 chars;
+`python -m app status` 1.3–1.8 s; `python -m app check` → `OK jobs=58 declared (55 jobs + 3 LongTasks), 58 available
+(phase 11), 0 unavailable`; 14 §10 read-only lines (health, feed, `/subnets/64`, spark, stream) as expected. Terminal
+S1–S3 with a `SentinelRuntime` built from the real `config.toml` on a scratch DB: 128 rows ingested, composite/tier/pillars
+equal to the feed for all 128 (SN64 78.18 A), detail 45 evidence rows, SN47 history 279 points / 8 flag marks, stream
+connected. Nothing was written to the live DB, nothing was sent to Telegram, no service was restarted.
+**Tests:** TaoSentinel 1174 passed (9 min 34 s); τ Terminal 183 passed (169 + 14); `make lint` clean.
+
+**Operator:** `sudo systemctl restart taosentinel` (loads the brief job, `status`-related code and the hub fix — the
+first brief then arrives at 06:00Z); `systemctl --user restart tao-terminal` (loads the tab, the stream thread and the
+enabled consumer), then 15 §10 S4 in the browser; 14 §10's Telegram lines on the phone (20 N3 item 1).

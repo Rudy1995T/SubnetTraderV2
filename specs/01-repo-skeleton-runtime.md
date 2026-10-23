@@ -415,13 +415,14 @@ def previous_fire_time(trigger: "BaseTrigger", now: datetime) -> datetime | None
 | `quant_weekly` | 13 | `quant.weekly_job:QuantWeeklyJob` | cron | `QUANT_WEEKLY_JOB_CRON` = `sun 05:00` (F2, E3) | 3600 | `QUANT_WEEKLY_JOB_TIMEOUT_S` = 1800 | `QUANT_ENABLED`, `QUANT_WEEKLY_JOB_ENABLED` (default false) | 10 | — (no network) | no | no | — | 0 | 1,211,520 |
 | `dereg_watch` | 14 | `notifications.watch:DeregWatchJob` | interval | every `DEREG_WATCH_INTERVAL_MIN` = 60 min, stagger | 600 | 120 | `DEREG_WATCH_ENABLED` | 11 | — (DB) | no | no | — | 0 | 7,440 |
 | `needs_review_digest` | 14 | `notifications.digest:NeedsReviewDigestJob` | cron | `NEEDS_REVIEW_DIGEST_DAY` + `NEEDS_REVIEW_DIGEST_HOUR_UTC`:00 = Mon 08:00Z | 3600 | 300 | `NEEDS_REVIEW_DIGEST_ENABLED` | 11 | `telegram` | no | no | — | 0 | 1,210,020 |
+| `market_brief_daily` | 14 | `notifications.brief:MarketBriefJob` | cron | `MARKET_BRIEF_AT_UTC` = 06:00Z | 3600 | 120 | `MARKET_BRIEF_ENABLED` | 11 | `telegram` | no | yes | — | 0 | 173,040 |
 | `telegram_bot` | 14 | `notifications.bot:TelegramBotTask` | longtask | continuous long-poll (`TELEGRAM_POLL_TIMEOUT_SEC` = 20 s) | — | — | `TELEGRAM_COMMANDS_ENABLED` | 11 | `telegram` | no | yes | — | — | — (not gated) |
 
 Per-job alert thresholds (`fail_alert_key` / `fail_alert_threshold`; e.g. a weekly job may set 1): `quant_weekly` uses `fail_alert_key="QUANT_ALERT_AFTER_FAILURES"` (13: 2); every other job uses `JOB_FAIL_ALERT_THRESHOLD` (5) — 04's `REGISTRY_ALERT_AFTER_FAILURES`, 06's `GITHUB_ALERT_AFTER_FAILURES`, 07's `WEB_ALERT_AFTER_FAILURES` and 09's `X_ALERT_AFTER_FAILURES` are retired by their owners. Retired placeholder ids (E2): `registry_sync`, `chain_rest_daily`, `chain_holders_weekly`, `github_repos_6h`, `github_org_daily`, `web_daily`, `x_teams_daily`, `x_kols_6h`, `rss_6h`, `llm_classify_6h`, `chain_prune` (now 03's `chain_prune` retention *policy*), and 10's former `nlp_rules_fallback`/`nlp_events_materialise`/`nlp_text_retention` (03 owns text retention, B10). 15 declares no job (H1: the push variant was dropped).
 
 **Workbench rows (19 §5, added 2026-10-16).** Owner 19, declared at phase 3 (the phase whose data they read), none `ops_exempt` or `startup_catchup`: `wb_technicals` (`features.technicals:TechnicalsJob`, cron hourly :12, `WB_ENABLED`, timeout 600), `wb_dereg` (`features.dereg_distance:DeregDistanceJob`, cron hourly :09, `WB_ENABLED`, timeout 600), `chain_constants_probe` (`collectors.chain_probe:ChainConstantsProbeJob`, cron 01:20Z, `WB_ENABLED`, provider `subtensor_rpc`, timeout 300), `wb_github_probe` (`collectors.wb_github_probe:WbGithubProbeJob`, cron hourly :25, `WB_ENABLED` + `WB_GITHUB_PROBE_ENABLED` and only while `GITHUB_TOKEN` is empty, provider `github`, timeout 3300: 45 requests at the no-token pace ≈ 42 min).
 
-**Declared vs available** (`python -m app check`, `/health.scheduler`; recomputed from the table above, E2). 57 entries = 54 jobs + 3 LongTasks (53 + 19's four, amended 2026-10-16). "Available" = factory module importable, cumulative in implementation order:
+**Declared vs available** (`python -m app check`, `/health.scheduler`; recomputed from the table above, E2). 58 entries = 55 jobs + 3 LongTasks (53 + 19's four, amended 2026-10-16; + 14's `market_brief_daily`, 2026-10-23). "Available" = factory module importable, cumulative in implementation order:
 
 | after phase | adds | available | unavailable |
 |---|---|---|---|
@@ -436,7 +437,7 @@ Per-job alert thresholds (`fail_alert_key` / `fail_alert_threshold`; e.g. a week
 | 8 (12) | 2 | 41 | 16 |
 | 9 (09, 10) | 8 + 4 | 53 | 4 |
 | 10 (13) | 1 | 54 | 3 |
-| 11 (14) | 2 + `telegram_bot` | 57 | 0 |
+| 11 (14) | 3 + `telegram_bot` | 58 | 0 |
 
 **Proposed `PAUSE_GROUPS` check (16 owns membership).** 01's `test_pause_groups_cover_job_table` asserts every group member is a declared id, no group contains an `ops_exempt` id, and group names are disjoint from job ids (16 §2.11). Against this table, 16's `llm` group still lists the retired `nlp_rules_fallback`, `nlp_events_materialise`, `nlp_text_retention` and lacks `llm_rules_fallback` — 16 must re-sync it (reported).
 
@@ -675,6 +676,13 @@ python -m app jobs            # the declared table: id | owner | phase | kind | 
 python -m app run-job <id>    # runtime without scheduler/HTTP server; one run through the wrapper (trigger="cli"; manual jobs too);
                               #   prints the status JSON; exit 0 iff ok
 python -m app health          # GET http://HEALTH_HOST:HEALTH_PORT/health, pretty-print; exit 0 iff status ∈ {ok, degraded}
+python -m app status          # (2026-10-23, 20 N3 item 4) one screen: /health (status, version — flagged when it differs
+                              #   from the checkout's `git rev-parse --short HEAD`, i.e. a restart is due), latest and
+                              #   official slot + regime, tier histogram, populated metrics per pillar (14 §2.8's rule),
+                              #   stale/failing/paused jobs, pending alerts (/health + unrouted `events`), active red
+                              #   flags, spend per group, DB size + last backup. The DB is opened read-only
+                              #   (`ReadOnlyDatabase`: `mode=ro` + `query_only`, no writer connection); the service
+                              #   down → the DB part still prints, exit 1. Target < 3 s.
 ```
 
 Other specs register sub-commands through `register(subparsers)` hooks imported when available: 03 `db …`, 16 `backup …`, `costs …`, `ops …` (incl. `ops pause/resume <target>` → `control_state`), 12 `python -m app.scoring …`, 13 `python -m app.quant …`. None of `check/jobs/run-job` takes 16's instance lock.
@@ -1297,6 +1305,8 @@ All keys live on the single `Settings` class and are read dynamically (`import a
 | `NEEDS_REVIEW_DIGEST_DAY` | str | `"mon"` |  |
 | `NEEDS_REVIEW_DIGEST_HOUR_UTC` | int | `8` |  |
 | `BLOCKED_SITE_DAYS` | int | `7` |  |
+| `MARKET_BRIEF_ENABLED` | bool | `True` | 14 §2.8 |
+| `MARKET_BRIEF_AT_UTC` | str | `"06:00"` | 14 §2.8; `HH:MM` UTC |
 | `FRONTEND_PORT` | int | `3001` |  |
 
 **Ops, backups, cost governor (16)** — 40 rows
@@ -1670,6 +1680,7 @@ pip install -e ".[dev]" && pip freeze > requirements.lock
 cp .env.example .env            # optionally set TELEGRAM_BOT_TOKEN/CHAT_ID, API_AUTH_TOKEN=$(openssl rand -hex 32)
 python -c "import bittensor" ; echo "expect: ModuleNotFoundError"
 python -m app check             # expect: schema_version=1, schema_warnings=[], sqlite_version ≥ 3.37, and the last line
+python -m app status            # (2026-10-23) one screen in < 3 s: health + version (restart hint when it differs from HEAD), slots, tiers, metrics/pillar, jobs, alerts, spend, DB; DB opened read-only
                                 #   "OK jobs=53 declared (50 jobs + 3 LongTasks), 7 available (phase 0), 46 unavailable"; exit 0
 python -m app jobs              # expect a 53-row table; available=yes exactly for log_retention_daily, storage_retention_daily,
                                 #   backup_daily, ops_guard_5m, ops_digest_daily, cost_ledger_hourly, alert_dispatch
@@ -1746,3 +1757,4 @@ Phase 0 is done when every line above matches and `pytest -q` is green. The "hel
   - Deps: `discord.py>=2.4,<3`; `[backfill]` extra (`async-substrate-interface`, `xxhash`); no bittensor/bittensor-wallet/substrate-interface (tested with and without the extra); 05's `SUBTENSOR_RPC_MODE=sdk` rejected.
   - Review: 14 old-bot line refs re-verified; fixed `run_health_server` sub-ranges, signal-handler/READY lines, `_health_alerted` range (1099-1146), main/entrypoint 3385-3486, telegram class ranges; package findings applied except those contradicting the ledger (see coordinator report).
 - 2026-10-20: §5 inventory + `TERMINAL_API_URL` (owner 14 §8.4a, loopback-only τ Terminal read API for the Telegram `/wallet` view); 658 keys.
+- 2026-10-23 (spec 20 N3): §2.14 `python -m app status`; §2.7 job table + `market_brief_daily` (owner 14 §2.8) → 58 declared (55 jobs + 3 LongTasks), phase-11 row 58; §5 inventory + `MARKET_BRIEF_ENABLED`, `MARKET_BRIEF_AT_UTC` → 660 keys. `app/storage/db.py` gains `ReadOnlyDatabase` (a reader-only `Database` for CLI views; no DDL, 03 unaffected).

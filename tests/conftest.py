@@ -149,9 +149,9 @@ def pytest_collection_modifyitems(config, items):
 # Built so far (spec 01 §2.7 "declared vs available"); bump when a phase lands.
 BUILT_PHASE = 11
 # 3+: 19 workbench rows; 4 = 27, 5 = 30, 6 = 34, 7 = 39, 8 = 41 and 9 = 53 (09's 8 + 10's 4 jobs) incl. 17's manual
-# backfill_github (S9, built 2026-10-22, 20 N2 item 1); 10 = 54 (13's quant_weekly); 11 = 57 (14's dereg_watch,
-# needs_review_digest, telegram_bot)
-AVAILABLE_BY_PHASE = {0: 7, 1: 9, 2: 16, 3: 21, 4: 27, 5: 30, 6: 34, 7: 39, 8: 41, 9: 53, 10: 54, 11: 57}
+# backfill_github (S9, built 2026-10-22, 20 N2 item 1); 10 = 54 (13's quant_weekly); 11 = 58 (14's dereg_watch,
+# needs_review_digest, telegram_bot, market_brief_daily — 20 N3, 2026-10-23)
+AVAILABLE_BY_PHASE = {0: 7, 1: 9, 2: 16, 3: 21, 4: 27, 5: 30, 6: 34, 7: 39, 8: 41, 9: 53, 10: 54, 11: 58}
 # Jobs of later phases built ahead of order at the operator's request (13 built 2026-10-17, 13 §11 item 15).
 EARLY_JOBS: frozenset[str] = frozenset()      # was {"quant_weekly"} until Phase 9 closed the gap (2026-10-18)
 EXPECTED_AVAILABLE = AVAILABLE_BY_PHASE[BUILT_PHASE] + sum(1 for _ in EARLY_JOBS)

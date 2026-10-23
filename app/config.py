@@ -33,7 +33,7 @@ _RESTART_EXPLICIT = frozenset({"HEALTH_HOST", "HEALTH_PORT", "DB_PATH", "JSONL_D
 _HHMM_KEYS = ("REGISTRY_IDENTITY_AT_UTC", "TMC_DAILY_AT_UTC", "TMC_WEEKLY_AT_UTC", "GITHUB_ORG_ENUM_CRON",
               "GITHUB_ACTIVITY_CRON", "GITHUB_METRICS_CRON", "GITHUB_HTML_PROBE_CRON", "OWNER_COLLECT_CRON",
               "X_TEAM_POLL_CRON", "X_MENTIONS_POLL_CRON", "X_CTF_CROSSCHECK_CRON", "RSS_GOOGLE_NEWS_POLL_CRON",
-              "YOUTUBE_POLL_CRON")
+              "YOUTUBE_POLL_CRON", "MARKET_BRIEF_AT_UTC")
 _DOW_HHMM_KEYS = ("QUANT_WEEKLY_JOB_CRON", "X_PROFILE_REFRESH_CRON")
 _HHMM_LIST_KEYS = ("CHAIN_FEATURES_AT_UTC", "INTEGRITY_FEATURES_AT_UTC")
 _HOURS_LIST_KEYS = ("SCORING_CRON_HOURS", "DISCORD_CRON_HOURS", "WEB_METRICS_CRON_HOURS", "X_KOL_POLL_CRON_HOURS")
@@ -620,6 +620,8 @@ class Settings(BaseSettings):
     NEEDS_REVIEW_DIGEST_DAY: str = "mon"
     NEEDS_REVIEW_DIGEST_HOUR_UTC: int = 8
     BLOCKED_SITE_DAYS: int = 7
+    MARKET_BRIEF_ENABLED: bool = True                     # 14 §2.8 daily brief (plain send, never a page)
+    MARKET_BRIEF_AT_UTC: str = "06:00"
     FRONTEND_PORT: int = 3001                               # retired 2026-10-18 (14 §5); nothing reads it
 
     # ── Ops, backups, cost governor (16) ────────────────────────────────────────────────────────────────────

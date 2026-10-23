@@ -1,4 +1,4 @@
-"""``python -m app [serve|check|jobs|run-job <id>|health|db …|backup …|costs …|ops …]`` (spec 01 §2.14)."""
+"""``python -m app [serve|check|jobs|run-job <id>|health|status|db …|backup …|costs …|ops …]`` (spec 01 §2.14)."""
 from __future__ import annotations
 
 import argparse
@@ -140,6 +140,123 @@ def _cmd_health(args: argparse.Namespace) -> int:
     return 0 if data.get("status") in ("ok", "degraded") else 1
 
 
+def _fetch_health() -> dict | None:
+    import httpx
+    s = app_config.settings
+    host = "127.0.0.1" if s.HEALTH_HOST in ("0.0.0.0", "::") else s.HEALTH_HOST
+    try:
+        return httpx.get(f"http://{host}:{s.HEALTH_PORT}/health", timeout=5).json()
+    except Exception:
+        return None
+
+
+def _git_head() -> str | None:
+    import subprocess
+    from pathlib import Path
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parent.parent,
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+async def _status() -> int:
+    """One screen for the operator (01 §2.14, 20 N3 item 4): /health + the DB read-only."""
+    import textwrap
+    from app.api import queries as Q
+    from app.api.review import list_items
+    from app.features.registry import PILLARS, scored
+    from app.notifications.format import fmt_age
+    from app.storage.db import ReadOnlyDatabase
+    from app.util.time import now_ts, to_iso
+    s = app_config.settings
+    spec = s.SPEC_VERSION
+    now = now_ts()
+    hm = lambda ts: "-" if ts is None else to_iso(ts)[5:16].replace("T", " ") + "Z"  # noqa: E731
+    h = _fetch_health()
+    out: list[str] = []
+    if h is None:
+        out.append(f"TaoSentinel · {to_iso(now)[:16]}Z · service UNREACHABLE on :{s.HEALTH_PORT} (DB part below)")
+    else:
+        out.append(f"TaoSentinel · {to_iso(now)[:16]}Z · service {h.get('status')} · v{h.get('version')} · "
+                   f"up {fmt_age(h.get('uptime_sec') or 0)}" + (f" · degraded: {', '.join(h['degraded_reasons'])}"
+                                                               if h.get("degraded_reasons") else ""))
+        running = str(h.get("version") or "").partition("+")[2]
+        head = _git_head()
+        if running and head and not (head.startswith(running) or running.startswith(head)):
+            out.append(f"  ! running {running}, checkout is {head}: sudo systemctl restart taosentinel to load it")
+    db = ReadOnlyDatabase(s.DB_PATH)
+    try:
+        await db.connect()
+    except Exception as exc:
+        out.append(f"DB       cannot open {s.DB_PATH} read-only: {exc}")
+        print("\n".join(out))
+        return 1
+    try:
+        meta = await Q.feed_meta(db, spec=spec)
+        S = meta.get("max_as_of")
+        off = await db.fetchval("SELECT MAX(as_of) FROM scores WHERE spec_version = ? AND shadow = 0 "
+                                "AND run_kind = 'official'", (spec,))
+        sc = (h or {}).get("scores") or {}
+        out.append(f"Scores   latest {hm(S)} {meta.get('run_kind') or '-'} · official {hm(off)} · regime "
+                   f"{meta.get('regime') or '-'}" + (" · feed STALE" if sc.get("stale") else ""))
+        if S is not None:
+            rows = await db.fetchall("SELECT status, tier, insufficient_data FROM scores WHERE spec_version = ? "
+                                     "AND shadow = 0 AND as_of = ?", (spec, S))
+            tiers = {t: sum(1 for r in rows if r["status"] == "active" and r["tier"] == t) for t in "ABCDF"}
+            ins = sum(1 for r in rows if r["insufficient_data"])
+            pre = sum(1 for r in rows if r["status"] == "pre_launch")
+            out.append("Tiers    " + " · ".join(f"{t} {n}" for t, n in tiers.items())
+                       + f" · insufficient {ins} · pre-launch {pre} (of {len(rows)} scored)")
+            n, cov = await Q.norm_coverage(db, spec=spec, as_of=S)
+            pp = Q.populated_by_pillar(n, cov)
+            out.append(f"Metrics  {sum(a for a, _ in pp.values())}/{sum(b for _, b in pp.values())} populated "
+                       f"(≥ half of {n}): " + " · ".join(f"{p} {a}/{b}" for p, (a, b) in pp.items()))
+            thin = [f"{d.key}={cov.get(d.key, 0)}" for p in PILLARS for d in scored(p) if cov.get(d.key, 0) * 2 < n]
+            if thin:
+                out += textwrap.wrap("thin: " + ", ".join(thin), 116, initial_indent="         ",
+                                     subsequent_indent="           ")
+        if h is not None:
+            jobs = {**(h.get("collectors") or {}), **(h.get("tasks") or {})}
+            pick = lambda f: sorted(j for j, v in jobs.items() if isinstance(v, dict) and f(v)) or ["none"]  # noqa: E731
+            sch = h.get("scheduler") or {}
+            out.append(f"Jobs     {sch.get('declared')} declared · {sch.get('available')} available · stale: "
+                       f"{', '.join(pick(lambda v: v.get('stale')))} · failing: "
+                       f"{', '.join(pick(lambda v: v.get('consecutive_failures')))} · paused: "
+                       f"{', '.join(pick(lambda v: v.get('paused')))}")
+        unrouted = await db.fetchval("SELECT COUNT(*) FROM events WHERE alerted_at IS NULL")
+        flags = await Q.active_flags(db, spec=spec)
+        reviews = await list_items(db, kind=None, netuid=None, limit=500)
+        pending = ((h or {}).get("alerts") or {}).get("pending_immediate")
+        out.append(f"Alerts   pending immediate {pending if pending is not None else '?'} · unrouted events {unrouted} · "
+                   f"red flags active {len(flags)} · open reviews {len(reviews)} · telegram "
+                   f"{'on' if (h or {}).get('telegram_configured') else 'off'}")
+        if h is not None:
+            parts = []
+            for g, v in sorted((h.get("spend") or {}).items()):
+                if v.get("request_cap"):
+                    parts.append(f"{g} {(v.get('requests') or 0) / 1000:.1f}k/{v['request_cap'] / 1000:.0f}k req")
+                elif v.get("cap_usd"):
+                    parts.append(f"{g} ${v.get('usd') or 0:.2f}/${v['cap_usd']:g}")
+                else:
+                    parts.append(f"{g} off")
+                if v.get("paused"):
+                    parts[-1] += " PAUSED"
+            out.append("Spend    " + " · ".join(parts))
+            d = h.get("db") or {}
+            disk = ((h.get("ops") or {}).get("disk") or {}).get("free_gb")
+            out.append(f"DB       {(d.get('size_bytes') or 0) / 1e9:.2f} GB + {(d.get('wal_bytes') or 0) / 1e6:.0f} MB WAL"
+                       f" · schema v{d.get('schema_version')} · backup {d.get('last_backup_age_hours')} h ago"
+                       + (f" · disk {disk} GB free" if disk is not None else ""))
+        else:
+            out.append(f"DB       schema v{db.schema_version} (read-only; size/backup need the service)")
+    finally:
+        await db.close()
+    print("\n".join(out))
+    return 0 if h is not None and h.get("status") in ("ok", "degraded") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m app", description="TaoSentinel")
     sub = p.add_subparsers(dest="cmd")
@@ -152,6 +269,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("job_id")
     r.set_defaults(func=lambda a: asyncio.run(_run_job(a.job_id)))
     sub.add_parser("health", help="GET /health of the running service").set_defaults(func=_cmd_health)
+    sub.add_parser("status", help="one-screen status: /health + the DB read-only").set_defaults(
+        func=lambda a: asyncio.run(_status()))
     from app.storage import cli as db_cli
     db_cli.register(sub)
     from app.ops import cli as ops_cli

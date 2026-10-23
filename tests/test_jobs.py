@@ -157,11 +157,11 @@ async def test_db_failure_does_not_escape(rt, monkeypatch):
 # ── scheduler / registry ────────────────────────────────────────────────────────────────────────────────────
 def test_job_table_shape():
     ids = [s.id for s in JOB_TABLE]
-    assert len(ids) == 57 == len(set(ids))
+    assert len(ids) == 58 == len(set(ids))
     assert sum(1 for s in JOB_TABLE if s.kind == "longtask") == 3
     assert not set(ids) & RETIRED_JOB_IDS
     counts = declared_counts()
-    assert counts == {0: 7, 1: 2, 2: 7, 3: 5, 4: 6, 5: 3, 6: 4, 7: 5, 8: 2, 9: 12, 10: 1, 11: 3}
+    assert counts == {0: 7, 1: 2, 2: 7, 3: 5, 4: 6, 5: 3, 6: 4, 7: 5, 8: 2, 9: 12, 10: 1, 11: 4}
 
 
 @pytest.mark.asyncio
@@ -170,7 +170,7 @@ async def test_registry_built_phases(rt):
     from tests.conftest import BUILT_PHASE, EARLY_JOBS, EXPECTED_AVAILABLE
     assert {"log_retention_daily", "storage_retention_daily", "backup_daily", "ops_guard_5m", "ops_digest_daily",
             "cost_ledger_hourly", "alert_dispatch"} <= set(rt.jobs)
-    assert len(rt.jobs) + len(rt.tasks) == EXPECTED_AVAILABLE and len(rt.unavailable) == 57 - EXPECTED_AVAILABLE
+    assert len(rt.jobs) + len(rt.tasks) == EXPECTED_AVAILABLE and len(rt.unavailable) == 58 - EXPECTED_AVAILABLE
     assert all(SPEC_BY_ID[j].phase <= BUILT_PHASE or j in EARLY_JOBS for j in [*rt.jobs, *rt.tasks])
 
 

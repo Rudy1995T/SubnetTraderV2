@@ -87,7 +87,7 @@ def _spec_inventory() -> set[str]:
 
 def test_inventory_equals_spec():
     inv = _spec_inventory()
-    assert len(inv) == 658
+    assert len(inv) == 660
     fields = set(Settings.model_fields) | {"SCORING_SPEC_VERSION"}
     assert inv == fields
 
