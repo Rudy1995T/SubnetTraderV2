@@ -29,13 +29,16 @@ def _score(r: dict) -> dict:
 async def latest_scores(db: "Database", *, spec: str, min_confidence: float = 0.0, tier: str | None = None,
                         include_prelaunch: bool = False, include_insufficient: bool = False,
                         netuids: list[int] | None = None) -> list[dict]:
-    """Latest ``scores`` row per **current** occupant for ``spec`` (02 §H1), sorted composite desc, nulls last."""
-    sql = (f"WITH latest AS (SELECT occupant_key, MAX(as_of) AS as_of FROM scores WHERE spec_version = :spec "
-           f"AND shadow = 0 GROUP BY occupant_key) "
-           f"SELECT {_SCORE_COLS} FROM scores s "
-           f"JOIN latest l ON l.occupant_key = s.occupant_key AND l.as_of = s.as_of "
-           f"JOIN subnets sub ON sub.occupant_key = s.occupant_key "
-           f"WHERE s.spec_version = :spec AND s.shadow = 0 "
+    """Latest ``scores`` row per **current** occupant for ``spec`` (02 §H1), sorted composite desc, nulls last.
+
+    Starts from ``subnets`` and takes each occupant's newest non-shadow row through ``ix_scores_latest`` (one table
+    row per occupant). A ``MAX(as_of) … GROUP BY`` over ``scores`` had to read every row for ``shadow`` — 52 k rows
+    of ≈ 7 KB ``explain`` after the 2026-10-23 backfill, 107 s on a cold cache (BUILD-LOG 2026-10-23 N3)."""
+    sql = (f"SELECT {_SCORE_COLS} FROM subnets sub "
+           f"JOIN scores s ON s.id = (SELECT s2.id FROM scores s2 INDEXED BY ix_scores_latest "
+           f"WHERE s2.spec_version = :spec AND s2.occupant_key = sub.occupant_key AND s2.shadow = 0 "
+           f"ORDER BY s2.as_of DESC LIMIT 1) "
+           f"WHERE 1 = 1 "
            f"AND (:pre = 1 OR s.status = 'active') AND s.confidence >= :minc "
            f"AND (:ins = 1 OR s.confidence >= 0.4) AND (:tier IS NULL OR s.tier = :tier)")
     params: dict[str, Any] = {"spec": spec, "pre": int(include_prelaunch), "minc": float(min_confidence),
@@ -93,11 +96,13 @@ async def subnet_rows(db: "Database", *, include_prelaunch: bool, include_deregi
 
 
 async def spark_7d(db: "Database", *, spec: str) -> dict[str, list[float]]:
+    """Last 7 official composites per ``subnets`` occupant (the only keys ``/subnets`` looks up), 7 index seeks each;
+    a window over every official row read the whole table (10.8 s after the 2026-10-23 backfill)."""
     rows = await db.fetchall(
-        "SELECT occupant_key, as_of, composite_smoothed FROM (SELECT occupant_key, as_of, composite_smoothed, "
-        "ROW_NUMBER() OVER (PARTITION BY occupant_key ORDER BY as_of DESC) AS rn FROM scores "
-        "WHERE spec_version = ? AND shadow = 0 AND run_kind = 'official' AND composite_smoothed IS NOT NULL) "
-        "WHERE rn <= 7 ORDER BY occupant_key, as_of", (spec,))
+        "SELECT s.occupant_key, s.as_of, s.composite_smoothed FROM subnets sub JOIN scores s ON s.id IN ("
+        "SELECT s2.id FROM scores s2 INDEXED BY ix_scores_occ WHERE s2.occupant_key = sub.occupant_key "
+        "AND s2.spec_version = ? AND s2.run_kind = 'official' AND s2.shadow = 0 AND s2.composite_smoothed IS NOT NULL "
+        "ORDER BY s2.as_of DESC LIMIT 7) ORDER BY s.occupant_key, s.as_of", (spec,))
     out: dict[str, list[float]] = {}
     for r in rows:
         out.setdefault(r["occupant_key"], []).append(round(float(r["composite_smoothed"]), 2))

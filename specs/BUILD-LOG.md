@@ -1519,3 +1519,19 @@ connected. Nothing was written to the live DB, nothing was sent to Telegram, no 
 **Operator:** `sudo systemctl restart taosentinel` (loads the brief job, `status`-related code and the hub fix — the
 first brief then arrives at 06:00Z); `systemctl --user restart tao-terminal` (loads the tab, the stream thread and the
 enabled consumer), then 15 §10 S4 in the browser; 14 §10's Telegram lines on the phone (20 N3 item 1).
+
+## 2026-10-23 (later) — N3 live check: empty Sentinel tab → feed query 107 s cold (fixed)
+
+**Seen:** after `taosentinel` (20:08Z) and `tao-terminal` (20:23Z) restarts the 🛡 Sentinel tab was empty: `/api/status.sentinel`
+`fresh_count 0`, `last_error ReadTimeout`, two failed polls (20:23:58Z prime, 20:38:58Z). The stream and the history proxy
+worked (flag markers were drawn), so only the feed was slow: `GET /api/v1/scores/latest` took **107.6 s**, then 10.1 s, then 1.0 s.
+**Cause:** `queries.latest_scores` grouped `MAX(as_of)` per occupant with `shadow = 0`, a column not in `ix_scores_latest`, so it
+read every `scores` row — 52,252 rows × ≈ 6.9 KB `explain` (≈ 360 MB) since the 392-slot backfill — on a cold page cache after
+a restart. `spark_7d` (`/api/v1/subnets`, `/ui` matrix) had the same shape: 10.8 s.
+**Fix (14 Changelog):** both queries start from `subnets` and seek per occupant (`ix_scores_latest` LIMIT 1, `ix_scores_occ`
+LIMIT 7); results checked equal to the old SQL on the live DB (four filter sets; spark on every `subnets` key). After
+`sudo systemctl restart taosentinel` (operator's permission, 20:41Z): feed **0.01 s** cold, `/api/v1/subnets` 0.38 s. A
+`POST /api/sentinel/reload` woke the terminal's poller: 128 fresh rows, SN64 78.18 A on both sides (15 §10 S1).
+**Terminal:** an empty store now shows the poll error and a *Poll now* button (15 §2.9.1). Tests: TaoSentinel API/notifications
+green; terminal suite below.
+
